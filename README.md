@@ -61,7 +61,8 @@ or product MQTT topics to this repository.
 - Unit tests: host test is present but not executable on this machine because
   no native host C toolchain/SDK is installed.
 - Hardware test: not verified on physical hardware.
-- CI: workflow is pinned to ESP-IDF `v6.1.0`, but no remote run is verified.
+- CI: workflow is pinned to ESP-IDF `v6.1.0`; its two remote runs failed
+  before the build because that exact Docker image tag has no manifest.
 
 See the detailed [verification status](docs/testing/verification-status.md)
 and [Callbox reference assessment](docs/reference/callbox-sews-assessment.md).

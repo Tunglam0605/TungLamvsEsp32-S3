@@ -5,7 +5,7 @@
 | Build | VERIFIED with local ESP-IDF `v6.1-dev` | Windows clean `set-target`, `fullclean`, and `build` passed on 2026-08-05. The final application image is `0x388a0`; exact v6.1.0 release parity remains pending. |
 | Unit test | NOT VERIFIED | `tests/host/bsp_do_state_test.c` covers logical-mask translation and commit semantics, but this Windows host has no native C toolchain/SDK to execute it. The ESP-IDF target build does compile `bsp_do_state.c`. |
 | Hardware test | NOT VERIFIED | No board was flashed or monitored. No pin is marked `VERIFIED_HARDWARE_TEST`. |
-| CI | NOT VERIFIED | Workflow is pinned to `espressif/idf:v6.1.0` and runs a clean build, but no remote workflow run has been observed. |
+| CI | NOT VERIFIED | Workflow is pinned to `espressif/idf:v6.1.0`. GitHub Actions runs `31002025705` and `31002063222` failed before `idf.py`: Docker Hub reported `manifest unknown` for that exact tag. No mutable alternative tag was substituted. |
 
 HIL must record the exact board revision, Flash/PSRAM detection, DI raw state
 while actuating each input, RGB/buzzer observation, and output measurement
