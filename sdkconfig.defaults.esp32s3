@@ -1,0 +1,5 @@
+# Waveshare's default ESP32-S3-WROOM-1U-N16R8 profile uses Octal PSRAM.
+# Runtime diagnostics still warn if a connected board differs.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y

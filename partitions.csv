@@ -1,0 +1,6 @@
+# Phase 0-1 deliberately has one firmware image only: no OTA slots or storage
+# partition are provisioned before their requirements are designed.
+# Name,   Type, SubType, Offset,  Size,      Flags
+nvs,      data, nvs,     0x9000,  0x6000,
+phy_init, data, phy,     0xf000,  0x1000,
+factory,  app,  factory, 0x10000, 0xff0000,

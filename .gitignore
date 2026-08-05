@@ -1,0 +1,25 @@
+# ESP-IDF build output and generated configuration
+/build/
+/build-*/
+/sdkconfig
+/sdkconfig.old
+/sdkconfig.*
+!/sdkconfig.defaults
+!/sdkconfig.defaults.*
+
+# ESP-IDF artifacts and logs
+*.bin
+*.elf
+*.map
+*.log
+compile_commands.json
+
+# IDE and local test output
+.vscode/
+.idea/
+/tests/host/build/
+/tests/host/build-*/
+
+# Python tooling
+__pycache__/
+*.py[cod]

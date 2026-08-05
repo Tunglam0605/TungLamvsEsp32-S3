@@ -1,0 +1,58 @@
+menu "Tung Lam ESP32-S3 platform"
+
+config PLATFORM_BOARD_PROFILE_N16R8
+    bool "Use Waveshare default N16R8 board profile"
+    default y
+    help
+        The expected hardware is ESP32-S3-WROOM-1U-N16R8 (16 MB flash,
+        8 MB PSRAM). Waveshare allows other module variants, so runtime
+        checks remain authoritative for a connected board.
+
+config PLATFORM_EXPECTED_FLASH_SIZE_MB
+    int "Expected flash size in MiB"
+    range 1 128
+    default 16
+    depends on PLATFORM_BOARD_PROFILE_N16R8
+
+config PLATFORM_EXPECTED_PSRAM_SIZE_MB
+    int "Expected PSRAM size in MiB"
+    range 0 32
+    default 8
+    depends on PLATFORM_BOARD_PROFILE_N16R8
+
+config PLATFORM_ENABLE_DI
+    bool "Enable board digital-input BSP"
+    default y
+
+config PLATFORM_ENABLE_DO
+    bool "Enable board digital-output BSP"
+    default y
+
+config PLATFORM_DI_ACTIVE_LOW_PROVISIONAL
+    bool "Provisional DI logical-active mapping: raw LOW is active"
+    default y
+    depends on PLATFORM_ENABLE_DI
+    help
+        This is a provisional mapping, not an HIL-verified electrical fact.
+        The hardware-test firmware logs raw and logical masks so it can be
+        confirmed or changed without concealing the assumption.
+
+config PLATFORM_DO_ACTIVE_HIGH_PROVISIONAL
+    bool "Provisional DO logical-ON mapping: TCA9554 register HIGH is ON"
+    default y
+    depends on PLATFORM_ENABLE_DO
+    help
+        This is based on the vendor demo's logical convention and is not yet
+        HIL-verified. BSP safe, desired, and applied masks remain logical;
+        only the BSP converts them to the physical TCA9554 register value.
+
+config PLATFORM_HARDWARE_TEST_RUN_OUTPUT_SEQUENCE
+    bool "Run DO1-DO8 sequence at hardware-test boot"
+    default n
+    depends on PLATFORM_ENABLE_DO
+    help
+        Disabled by default to avoid actuating attached industrial loads.
+        When enabled, the hardware-test application toggles one output at a
+        time and always returns to the configured logical safe state.
+
+endmenu

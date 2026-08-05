@@ -1,0 +1,17 @@
+name: ESP-IDF v6.1.0 clean build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  clean-build:
+    runs-on: ubuntu-latest
+    container: espressif/idf:v6.1.0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set target and clean build
+        run: |
+          idf.py set-target esp32s3
+          idf.py fullclean
+          idf.py build
