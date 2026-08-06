@@ -12,25 +12,31 @@ static void test_active_high_state_tracking(void)
     assert(state.desired_mask == 0x00);
     assert(state.safe_mask == 0x00);
     assert(state.applied_mask == 0x00);
+    assert(!state.applied_valid);
     assert(bsp_do_state_to_register_mask(&state, 0x00) == 0x00);
 
     bsp_do_state_set_desired(&state, 0xA5);
     assert(state.desired_mask == 0xA5);
     // A requested write must not be reported as applied before I2C succeeds.
     assert(state.applied_mask == 0x00);
+    assert(!state.applied_valid);
     assert(bsp_do_state_to_register_mask(&state, state.desired_mask) == 0xA5);
 
     bsp_do_state_commit_applied(&state, state.desired_mask);
     assert(state.applied_mask == 0xA5);
+    assert(state.applied_valid);
 }
 
 static void test_active_low_translation(void)
 {
     bsp_do_state_t state;
-    bsp_do_state_init(&state, false, 0x00);
+    bsp_do_state_init(&state, false, 0x81);
 
     // Logical OFF is not assumed to be register-low when polarity is active-low.
+    assert(state.safe_mask == 0x81);
+    assert(state.desired_mask == 0x81);
     assert(bsp_do_state_to_register_mask(&state, 0x00) == UINT8_MAX);
+    assert(!state.applied_valid);
 
     bsp_do_state_set_desired(&state, 0x3C);
     assert(state.applied_mask == 0x00);
@@ -38,6 +44,7 @@ static void test_active_low_translation(void)
 
     bsp_do_state_commit_applied(&state, state.desired_mask);
     assert(state.applied_mask == 0x3C);
+    assert(state.applied_valid);
 }
 
 int main(void)
