@@ -108,6 +108,7 @@ esp_err_t bsp_do_init(void)
 
     bsp_do_state_commit_applied(&s_state, s_state.safe_mask);
     s_initialized = true;
+    ESP_LOGI(TAG, "TCA9554 initialized at I2C address 0x%02x", BSP_TCA9554_ADDRESS);
     ESP_LOGI(TAG, "Safe logical DO mask applied: 0x%02x (provisional register polarity: %s)",
              s_state.safe_mask,
              logical_on_is_register_high ? "active-high" : "active-low");

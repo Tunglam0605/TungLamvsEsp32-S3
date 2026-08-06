@@ -26,7 +26,15 @@ esp_err_t bsp_boot_button_init(void)
     return err;
 }
 
-bool bsp_boot_button_is_pressed(void)
+esp_err_t bsp_boot_button_is_pressed(bool *pressed)
 {
-    return s_initialized && gpio_get_level(BSP_BOOT_BUTTON_GPIO) == 0;
+    if (pressed == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    *pressed = gpio_get_level(BSP_BOOT_BUTTON_GPIO) == 0;
+    return ESP_OK;
 }

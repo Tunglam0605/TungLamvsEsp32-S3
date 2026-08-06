@@ -9,7 +9,7 @@ extern "C" {
 #endif
 
 esp_err_t bsp_boot_button_init(void);
-bool bsp_boot_button_is_pressed(void);
+esp_err_t bsp_boot_button_is_pressed(bool *pressed);
 
 #ifdef __cplusplus
 }

@@ -5,15 +5,51 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include "esp_app_desc.h"
 #include "esp_err.h"
 #include "esp_flash.h"
 #include "esp_log.h"
+#include "esp_partition.h"
 #include "esp_psram.h"
+#include "esp_system.h"
 #include "sdkconfig.h"
 
 #include "bsp_waveshare_s3_8di8do.h"
 
 static const char *TAG = "board_hw_test";
+
+static void board_hardware_test_log_firmware_identity(void)
+{
+    const esp_app_desc_t *description = esp_app_get_description();
+    ESP_LOGI(TAG, "Firmware: project=%s version=%s idf=%s",
+             description->project_name,
+             description->version,
+             description->idf_ver);
+    ESP_LOGI(TAG, "Reset reason: %d", (int)esp_reset_reason());
+}
+
+static void board_hardware_test_log_partition_table(void)
+{
+    const esp_partition_t *factory = esp_partition_find_first(
+        ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, NULL);
+    const esp_partition_t *storage = esp_partition_find_first(
+        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, NULL);
+
+    if (factory != NULL) {
+        ESP_LOGI(TAG, "Partition table: app label=%s offset=0x%lx size=0x%lx",
+                 factory->label,
+                 (unsigned long)factory->address,
+                 (unsigned long)factory->size);
+    } else {
+        ESP_LOGW(TAG, "Partition table: factory app partition not found");
+    }
+    if (storage != NULL) {
+        ESP_LOGI(TAG, "Partition table: data label=%s offset=0x%lx size=0x%lx",
+                 storage->label,
+                 (unsigned long)storage->address,
+                 (unsigned long)storage->size);
+    }
+}
 
 static void board_hardware_test_log_profile(void)
 {
@@ -107,6 +143,8 @@ static esp_err_t board_hardware_test_run_indicator_test(void)
         return err;
     }
 
+    ESP_LOGI(TAG, "RGB test command completed; visual confirmation remains HIL evidence");
+
     err = bsp_buzzer_set(true);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Buzzer enable failed: %s", esp_err_to_name(err));
@@ -116,6 +154,8 @@ static esp_err_t board_hardware_test_run_indicator_test(void)
     err = bsp_buzzer_set(false);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Buzzer disable failed: %s", esp_err_to_name(err));
+    } else {
+        ESP_LOGI(TAG, "Buzzer test command completed; audible confirmation remains HIL evidence");
     }
     return err;
 }
@@ -179,6 +219,8 @@ esp_err_t board_hardware_test_start(void)
 {
     ESP_LOGI(TAG, "Waveshare ESP32-S3-POE-ETH-8DI-8DO hardware test");
     ESP_LOGI(TAG, "Expected profile: ESP32-S3-WROOM-1U-N16R8 (provisional per connected board)");
+    board_hardware_test_log_firmware_identity();
+    board_hardware_test_log_partition_table();
 
     esp_err_t err = bsp_board_init();
     if (err != ESP_OK) {
@@ -197,8 +239,14 @@ esp_err_t board_hardware_test_start(void)
     if (err != ESP_OK) {
         return err;
     }
+    bool boot_pressed = false;
+    err = bsp_boot_button_is_pressed(&boot_pressed);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "BOOT button read failed: %s", esp_err_to_name(err));
+        return err;
+    }
     ESP_LOGI(TAG, "BOOT button currently %s (provisional active-low interpretation)",
-             bsp_boot_button_is_pressed() ? "pressed" : "released");
+             boot_pressed ? "pressed" : "released");
     bsp_do_status_t do_status;
     err = bsp_do_get_status(&do_status);
     if (err != ESP_OK) {
