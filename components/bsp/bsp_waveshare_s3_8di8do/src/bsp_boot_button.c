@@ -1,4 +1,4 @@
-#include "bsp_waveshare_s3_8di8do.h"
+#include "bsp_boot_button.h"
 
 #include "driver/gpio.h"
 

@@ -20,18 +20,9 @@ config PLATFORM_EXPECTED_PSRAM_SIZE_MB
     default 8
     depends on PLATFORM_BOARD_PROFILE_N16R8
 
-config PLATFORM_ENABLE_DI
-    bool "Enable board digital-input BSP"
-    default y
-
-config PLATFORM_ENABLE_DO
-    bool "Enable board digital-output BSP"
-    default y
-
 config PLATFORM_DI_ACTIVE_LOW_PROVISIONAL
     bool "Provisional DI logical-active mapping: raw LOW is active"
     default y
-    depends on PLATFORM_ENABLE_DI
     help
         This is a provisional mapping, not an HIL-verified electrical fact.
         The hardware-test firmware logs raw and logical masks so it can be
@@ -40,7 +31,6 @@ config PLATFORM_DI_ACTIVE_LOW_PROVISIONAL
 config PLATFORM_DO_ACTIVE_HIGH_PROVISIONAL
     bool "Provisional DO logical-ON mapping: TCA9554 register HIGH is ON"
     default y
-    depends on PLATFORM_ENABLE_DO
     help
         This is based on the vendor demo's logical convention and is not yet
         HIL-verified. BSP safe, desired, and applied masks remain logical;
@@ -49,7 +39,6 @@ config PLATFORM_DO_ACTIVE_HIGH_PROVISIONAL
 config PLATFORM_HARDWARE_TEST_RUN_OUTPUT_SEQUENCE
     bool "Run DO1-DO8 sequence at hardware-test boot"
     default n
-    depends on PLATFORM_ENABLE_DO
     help
         Disabled by default to avoid actuating attached industrial loads.
         When enabled, the hardware-test application toggles one output at a

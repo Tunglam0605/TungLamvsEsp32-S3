@@ -1,4 +1,9 @@
-#include "bsp_waveshare_s3_8di8do.h"
+#include "bsp_board.h"
+#include "bsp_boot_button.h"
+#include "bsp_buzzer.h"
+#include "bsp_di.h"
+#include "bsp_do.h"
+#include "bsp_rgb.h"
 
 #include "esp_log.h"
 
@@ -13,13 +18,8 @@ static const bsp_capabilities_t s_capabilities = {
 
 esp_err_t bsp_board_init(void)
 {
-    esp_err_t err = bsp_i2c_init();
-    if (err != ESP_OK) {
-        return err;
-    }
-
     // DO safe state is deliberately initialized before non-critical peripherals.
-    err = bsp_do_init();
+    esp_err_t err = bsp_do_init();
     if (err != ESP_OK) {
         return err;
     }
@@ -41,7 +41,12 @@ esp_err_t bsp_board_init(void)
         return err;
     }
 
-    ESP_LOGI(TAG, "Waveshare BSP initialized; safe DO mask=0x%02x", bsp_do_get_safe_mask());
+    bsp_do_status_t do_status;
+    err = bsp_do_get_status(&do_status);
+    if (err != ESP_OK) {
+        return err;
+    }
+    ESP_LOGI(TAG, "Waveshare BSP initialized; safe DO mask=0x%02x", do_status.safe_mask);
     return ESP_OK;
 }
 

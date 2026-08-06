@@ -1,4 +1,4 @@
-#include "bsp_waveshare_s3_8di8do.h"
+#include "bsp_di.h"
 
 #include "esp_log.h"
 #include "sdkconfig.h"
@@ -33,49 +33,73 @@ esp_err_t bsp_di_init(void)
     return gpio_config(&config);
 }
 
-bool bsp_di_read_raw(bsp_di_channel_t channel)
+esp_err_t bsp_di_read_raw(bsp_di_channel_t channel, bool *raw_high)
 {
-    if (!bsp_di_channel_is_valid(channel)) {
+    if (raw_high == NULL || !bsp_di_channel_is_valid(channel)) {
         ESP_LOGE(TAG, "Invalid DI channel: %d", channel);
-        return false;
+        return ESP_ERR_INVALID_ARG;
     }
-    return gpio_get_level(bsp_di_channel_to_gpio(channel)) != 0;
+    *raw_high = gpio_get_level(bsp_di_channel_to_gpio(channel)) != 0;
+    return ESP_OK;
 }
 
-uint8_t bsp_di_read_raw_mask(void)
+esp_err_t bsp_di_read_raw_mask(uint8_t *raw_high_mask)
 {
+    if (raw_high_mask == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
     uint8_t mask = 0;
     for (bsp_di_channel_t channel = BSP_DI_1; channel < BSP_DI_COUNT; ++channel) {
-        if (bsp_di_read_raw(channel)) {
+        bool raw_high;
+        const esp_err_t err = bsp_di_read_raw(channel, &raw_high);
+        if (err != ESP_OK) {
+            return err;
+        }
+        if (raw_high) {
             mask |= (uint8_t)(1U << channel);
         }
     }
-    return mask;
+    *raw_high_mask = mask;
+    return ESP_OK;
 }
 
-bool bsp_di_read(bsp_di_channel_t channel)
+esp_err_t bsp_di_read(bsp_di_channel_t channel, bool *active)
 {
-    if (!bsp_di_channel_is_valid(channel)) {
+    if (active == NULL || !bsp_di_channel_is_valid(channel)) {
         ESP_LOGE(TAG, "Invalid DI channel: %d", channel);
-        return false;
+        return ESP_ERR_INVALID_ARG;
     }
-    const bool raw_high = bsp_di_read_raw(channel);
+    bool raw_high;
+    const esp_err_t err = bsp_di_read_raw(channel, &raw_high);
+    if (err != ESP_OK) {
+        return err;
+    }
 #if CONFIG_PLATFORM_DI_ACTIVE_LOW_PROVISIONAL
-    return !raw_high;
+    *active = !raw_high;
 #else
-    return raw_high;
+    *active = raw_high;
 #endif
+    return ESP_OK;
 }
 
-uint8_t bsp_di_read_mask(void)
+esp_err_t bsp_di_read_mask(uint8_t *active_mask)
 {
+    if (active_mask == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
     uint8_t mask = 0;
     for (bsp_di_channel_t channel = BSP_DI_1; channel < BSP_DI_COUNT; ++channel) {
-        if (bsp_di_read(channel)) {
+        bool active;
+        const esp_err_t err = bsp_di_read(channel, &active);
+        if (err != ESP_OK) {
+            return err;
+        }
+        if (active) {
             mask |= (uint8_t)(1U << channel);
         }
     }
-    return mask;
+    *active_mask = mask;
+    return ESP_OK;
 }
 
 bool bsp_di_uses_provisional_active_low(void)

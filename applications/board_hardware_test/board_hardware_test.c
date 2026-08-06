@@ -44,10 +44,8 @@ static void board_hardware_test_log_profile(void)
 #endif
 }
 
-static void board_hardware_test_log_inputs(void)
+static void board_hardware_test_log_input_masks(uint8_t raw_mask, uint8_t logical_mask)
 {
-    const uint8_t raw_mask = bsp_di_read_raw_mask();
-    const uint8_t logical_mask = bsp_di_read_mask();
     ESP_LOGI(TAG,
              "DI raw=0x%02x logical=0x%02x (provisional raw-%s-is-active)",
              raw_mask,
@@ -55,30 +53,91 @@ static void board_hardware_test_log_inputs(void)
              bsp_di_uses_provisional_active_low() ? "LOW" : "HIGH");
 }
 
-static void board_hardware_test_run_indicator_test(void)
+static esp_err_t board_hardware_test_read_inputs(uint8_t *raw_mask, uint8_t *logical_mask)
 {
-    (void)bsp_rgb_set(32, 0, 0);
-    vTaskDelay(pdMS_TO_TICKS(150));
-    (void)bsp_rgb_set(0, 32, 0);
-    vTaskDelay(pdMS_TO_TICKS(150));
-    (void)bsp_rgb_set(0, 0, 32);
-    vTaskDelay(pdMS_TO_TICKS(150));
-    (void)bsp_rgb_set(0, 0, 0);
-
-    (void)bsp_buzzer_set(true);
-    vTaskDelay(pdMS_TO_TICKS(100));
-    (void)bsp_buzzer_set(false);
+    esp_err_t err = bsp_di_read_raw_mask(raw_mask);
+    if (err != ESP_OK) {
+        return err;
+    }
+    return bsp_di_read_mask(logical_mask);
 }
 
-static void board_hardware_test_run_optional_output_sequence(void)
+static esp_err_t board_hardware_test_log_inputs(void)
 {
+    uint8_t raw_mask;
+    uint8_t logical_mask;
+    const esp_err_t err = board_hardware_test_read_inputs(&raw_mask, &logical_mask);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to read DI states: %s", esp_err_to_name(err));
+        return err;
+    }
+    board_hardware_test_log_input_masks(raw_mask, logical_mask);
+    return ESP_OK;
+}
+
+static esp_err_t board_hardware_test_set_rgb_and_wait(uint8_t red, uint8_t green, uint8_t blue)
+{
+    const esp_err_t err = bsp_rgb_set(red, green, blue);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "RGB write failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    vTaskDelay(pdMS_TO_TICKS(150));
+    return ESP_OK;
+}
+
+static esp_err_t board_hardware_test_run_indicator_test(void)
+{
+    esp_err_t err = board_hardware_test_set_rgb_and_wait(32, 0, 0);
+    if (err == ESP_OK) {
+        err = board_hardware_test_set_rgb_and_wait(0, 32, 0);
+    }
+    if (err == ESP_OK) {
+        err = board_hardware_test_set_rgb_and_wait(0, 0, 32);
+    }
+
+    const esp_err_t rgb_off_err = bsp_rgb_set(0, 0, 0);
+    if (rgb_off_err != ESP_OK) {
+        ESP_LOGE(TAG, "RGB off write failed: %s", esp_err_to_name(rgb_off_err));
+        if (err == ESP_OK) {
+            err = rgb_off_err;
+        }
+    }
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    err = bsp_buzzer_set(true);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Buzzer enable failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    vTaskDelay(pdMS_TO_TICKS(100));
+    err = bsp_buzzer_set(false);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Buzzer disable failed: %s", esp_err_to_name(err));
+    }
+    return err;
+}
+
+static esp_err_t board_hardware_test_run_optional_output_sequence(void)
+{
+    esp_err_t sequence_err = ESP_OK;
 #if CONFIG_PLATFORM_HARDWARE_TEST_RUN_OUTPUT_SEQUENCE
     ESP_LOGW(TAG, "Starting enabled DO sequence; attached loads may actuate");
     for (bsp_do_channel_t channel = BSP_DO_1; channel < BSP_DO_COUNT; ++channel) {
         ESP_LOGI(TAG, "Testing DO%d", channel + 1);
-        (void)bsp_do_write(channel, true);
+        sequence_err = bsp_do_write(channel, true);
+        if (sequence_err != ESP_OK) {
+            ESP_LOGE(TAG, "DO%d enable failed: %s", channel + 1, esp_err_to_name(sequence_err));
+            break;
+        }
         vTaskDelay(pdMS_TO_TICKS(250));
-        (void)bsp_do_write(channel, false);
+        sequence_err = bsp_do_write(channel, false);
+        if (sequence_err != ESP_OK) {
+            ESP_LOGE(TAG, "DO%d disable failed: %s", channel + 1, esp_err_to_name(sequence_err));
+            break;
+        }
     }
 #else
     ESP_LOGI(TAG, "DO sequence disabled by CONFIG_PLATFORM_HARDWARE_TEST_RUN_OUTPUT_SEQUENCE");
@@ -87,7 +146,9 @@ static void board_hardware_test_run_optional_output_sequence(void)
     const esp_err_t err = bsp_do_apply_safe_state();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to restore DO safe state: %s", esp_err_to_name(err));
+        return err;
     }
+    return sequence_err;
 }
 
 static void board_hardware_test_task(void *context)
@@ -97,10 +158,16 @@ static void board_hardware_test_task(void *context)
     uint8_t previous_logical_mask = UINT8_MAX;
 
     while (true) {
-        const uint8_t raw_mask = bsp_di_read_raw_mask();
-        const uint8_t logical_mask = bsp_di_read_mask();
+        uint8_t raw_mask;
+        uint8_t logical_mask;
+        const esp_err_t err = board_hardware_test_read_inputs(&raw_mask, &logical_mask);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "DI polling failed: %s", esp_err_to_name(err));
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            continue;
+        }
         if (raw_mask != previous_raw_mask || logical_mask != previous_logical_mask) {
-            board_hardware_test_log_inputs();
+            board_hardware_test_log_input_masks(raw_mask, logical_mask);
             previous_raw_mask = raw_mask;
             previous_logical_mask = logical_mask;
         }
@@ -126,17 +193,33 @@ esp_err_t board_hardware_test_start(void)
              capabilities->has_buzzer,
              capabilities->has_rgb);
     board_hardware_test_log_profile();
-    board_hardware_test_log_inputs();
+    err = board_hardware_test_log_inputs();
+    if (err != ESP_OK) {
+        return err;
+    }
     ESP_LOGI(TAG, "BOOT button currently %s (provisional active-low interpretation)",
              bsp_boot_button_is_pressed() ? "pressed" : "released");
-    ESP_LOGI(TAG, "DO masks: desired=0x%02x applied=0x%02x safe=0x%02x; provisional ON=%s",
-             bsp_do_get_desired_mask(),
-             bsp_do_get_applied_mask(),
-             bsp_do_get_safe_mask(),
+    bsp_do_status_t do_status;
+    err = bsp_do_get_status(&do_status);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to obtain DO state: %s", esp_err_to_name(err));
+        return err;
+    }
+    ESP_LOGI(TAG, "DO masks: desired=0x%02x applied=0x%02x valid=%d safe=0x%02x; provisional ON=%s",
+             do_status.desired_mask,
+             do_status.applied_mask,
+             do_status.applied_valid,
+             do_status.safe_mask,
              bsp_do_uses_provisional_active_high() ? "register HIGH" : "register LOW");
 
-    board_hardware_test_run_indicator_test();
-    board_hardware_test_run_optional_output_sequence();
+    err = board_hardware_test_run_indicator_test();
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = board_hardware_test_run_optional_output_sequence();
+    if (err != ESP_OK) {
+        return err;
+    }
 
     if (xTaskCreate(board_hardware_test_task,
                     "board_hw_test",

@@ -1,10 +1,12 @@
-#include "bsp_waveshare_s3_8di8do.h"
+#include "bsp_rgb.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
 #include "driver/rmt_encoder.h"
 #include "driver/rmt_tx.h"
+
+#include "esp_log.h"
 
 #include "bsp_pins.h"
 
@@ -14,6 +16,31 @@
 static rmt_channel_handle_t s_channel;
 static rmt_encoder_handle_t s_encoder;
 static SemaphoreHandle_t s_lock;
+static const char *TAG = "bsp_rgb";
+
+static void bsp_rgb_delete_channel(void)
+{
+    if (s_channel == NULL) {
+        return;
+    }
+    const esp_err_t err = rmt_del_channel(s_channel);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to delete RMT channel: %s", esp_err_to_name(err));
+    }
+    s_channel = NULL;
+}
+
+static void bsp_rgb_delete_encoder(void)
+{
+    if (s_encoder == NULL) {
+        return;
+    }
+    const esp_err_t err = rmt_del_encoder(s_encoder);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to delete RMT encoder: %s", esp_err_to_name(err));
+    }
+    s_encoder = NULL;
+}
 
 static rmt_symbol_word_t bsp_rgb_symbol_for_bit(bool value)
 {
@@ -53,28 +80,23 @@ esp_err_t bsp_rgb_init(void)
     const rmt_copy_encoder_config_t encoder_config = {};
     err = rmt_new_copy_encoder(&encoder_config, &s_encoder);
     if (err != ESP_OK) {
-        (void)rmt_del_channel(s_channel);
-        s_channel = NULL;
+        bsp_rgb_delete_channel();
         return err;
     }
 
     s_lock = xSemaphoreCreateMutex();
     if (s_lock == NULL) {
-        (void)rmt_del_encoder(s_encoder);
-        (void)rmt_del_channel(s_channel);
-        s_encoder = NULL;
-        s_channel = NULL;
+        bsp_rgb_delete_encoder();
+        bsp_rgb_delete_channel();
         return ESP_ERR_NO_MEM;
     }
 
     err = rmt_enable(s_channel);
     if (err != ESP_OK) {
         vSemaphoreDelete(s_lock);
-        (void)rmt_del_encoder(s_encoder);
-        (void)rmt_del_channel(s_channel);
+        bsp_rgb_delete_encoder();
+        bsp_rgb_delete_channel();
         s_lock = NULL;
-        s_encoder = NULL;
-        s_channel = NULL;
     }
     return err;
 }

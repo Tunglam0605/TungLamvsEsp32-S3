@@ -1,4 +1,4 @@
-#include "bsp_waveshare_s3_8di8do.h"
+#include "bsp_buzzer.h"
 
 #include "driver/ledc.h"
 

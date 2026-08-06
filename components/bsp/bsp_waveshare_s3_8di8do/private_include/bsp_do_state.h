@@ -8,6 +8,7 @@ typedef struct {
     uint8_t desired_mask;
     uint8_t applied_mask;
     uint8_t safe_mask;
+    bool applied_valid;
 } bsp_do_state_t;
 
 void bsp_do_state_init(bsp_do_state_t *state, bool logical_on_is_register_high, uint8_t safe_mask);

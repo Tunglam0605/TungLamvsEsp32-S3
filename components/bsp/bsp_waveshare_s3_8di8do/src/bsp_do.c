@@ -1,4 +1,4 @@
-#include "bsp_waveshare_s3_8di8do.h"
+#include "bsp_do.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -9,6 +9,7 @@
 #include "tca9554.h"
 
 #include "bsp_do_state.h"
+#include "bsp_i2c_internal.h"
 #include "bsp_pins.h"
 
 static const char *TAG = "bsp_do";
@@ -27,9 +28,10 @@ static esp_err_t bsp_do_apply_mask_locked(uint8_t logical_mask)
     if (err == ESP_OK) {
         bsp_do_state_commit_applied(&s_state, logical_mask);
     } else {
-        ESP_LOGE(TAG, "Output write failed; desired=0x%02x applied=0x%02x err=%s",
+        ESP_LOGE(TAG, "Output write failed; desired=0x%02x applied=0x%02x valid=%d err=%s",
                  s_state.desired_mask,
                  s_state.applied_mask,
+                 s_state.applied_valid,
                  esp_err_to_name(err));
     }
     return err;
@@ -69,7 +71,11 @@ esp_err_t bsp_do_init(void)
 
     s_lock = xSemaphoreCreateMutex();
     if (s_lock == NULL) {
-        (void)tca9554_delete(s_expander);
+        const esp_err_t delete_err = tca9554_delete(s_expander);
+        if (delete_err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to delete TCA9554 after mutex allocation failure: %s",
+                     esp_err_to_name(delete_err));
+        }
         s_expander = NULL;
         return ESP_ERR_NO_MEM;
     }
@@ -91,7 +97,11 @@ esp_err_t bsp_do_init(void)
         ESP_LOGE(TAG, "Failed to apply early safe state: %s", esp_err_to_name(err));
         vSemaphoreDelete(s_lock);
         s_lock = NULL;
-        (void)tca9554_delete(s_expander);
+        const esp_err_t delete_err = tca9554_delete(s_expander);
+        if (delete_err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to delete TCA9554 after safe-state failure: %s",
+                     esp_err_to_name(delete_err));
+        }
         s_expander = NULL;
         return err;
     }
@@ -138,34 +148,21 @@ esp_err_t bsp_do_write_mask(uint8_t mask)
     return err;
 }
 
-uint8_t bsp_do_get_desired_mask(void)
+esp_err_t bsp_do_get_status(bsp_do_status_t *status)
 {
-    if (bsp_do_take_lock() != ESP_OK) {
-        return 0;
+    if (status == NULL) {
+        return ESP_ERR_INVALID_ARG;
     }
-    const uint8_t value = s_state.desired_mask;
-    xSemaphoreGive(s_lock);
-    return value;
-}
-
-uint8_t bsp_do_get_applied_mask(void)
-{
-    if (bsp_do_take_lock() != ESP_OK) {
-        return 0;
+    const esp_err_t err = bsp_do_take_lock();
+    if (err != ESP_OK) {
+        return err;
     }
-    const uint8_t value = s_state.applied_mask;
+    status->desired_mask = s_state.desired_mask;
+    status->applied_mask = s_state.applied_mask;
+    status->safe_mask = s_state.safe_mask;
+    status->applied_valid = s_state.applied_valid;
     xSemaphoreGive(s_lock);
-    return value;
-}
-
-uint8_t bsp_do_get_safe_mask(void)
-{
-    if (bsp_do_take_lock() != ESP_OK) {
-        return BSP_DO_LOGICAL_SAFE_MASK;
-    }
-    const uint8_t value = s_state.safe_mask;
-    xSemaphoreGive(s_lock);
-    return value;
+    return ESP_OK;
 }
 
 esp_err_t bsp_do_apply_safe_state(void)
