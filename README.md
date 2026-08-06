@@ -58,11 +58,11 @@ or product MQTT topics to this repository.
 
 - Build: exact ESP-IDF `v6.0.1` clean-build verification is recorded in the
   test status; the earlier `v6.1-dev` compilation is historical only.
-- Unit tests: host test covers DO state transitions and is run independently
-  in CI; see the recorded test status for the latest verified result.
+- Unit tests: host test covers DO state transitions and passed independently
+  in GitHub Actions run `31063665960`.
 - Hardware test: not verified on physical hardware.
-- CI: ESP-IDF clean build uses the immutable stable image tag
-  `espressif/idf:v6.0.1`, alongside a native host-test job.
+- CI: GitHub Actions run `31063665960` passed the ESP-IDF v6.0.1 clean build
+  and native host-test jobs.
 
 See the detailed [verification status](docs/testing/verification-status.md)
 and [Callbox reference assessment](docs/reference/callbox-sews-assessment.md).
