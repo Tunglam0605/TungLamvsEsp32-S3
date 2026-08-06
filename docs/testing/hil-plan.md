@@ -16,8 +16,24 @@ Mục tiêu: chứng minh firmware boot ổn định, profile runtime, BSP, I2C/
 1. Xác minh đúng cổng serial và cổng không bị chương trình khác giữ.
 2. Chạy `idf.py set-target esp32s3`, `idf.py fullclean`, `idf.py build` trong shell đã export ESP-IDF v6.0.1.
 3. Xác minh `sdkconfig` chứa `# CONFIG_PLATFORM_HARDWARE_TEST_RUN_OUTPUT_SEQUENCE is not set`.
-4. Flash rồi monitor với cổng đã xác minh. Dừng ngay nếu có lỗi BSP, I2C/TCA, safe-state, boot loop, panic, watchdog, hoặc profile làm firmware không boot.
-5. Lưu boot log nguyên vẹn; không suy diễn trạng thái điện của DI/DO từ log đơn thuần.
+4. Flash và monitor bằng hai lệnh riêng trong ESP-IDF terminal:
+
+   ```powershell
+   idf.py -p COMx flash
+   idf.py -p COMx monitor
+   ```
+
+5. Board hiện dùng không có nút RESET/EN vật lý. Để lấy lại boot log, giữ USB
+   serial kết nối và power-cycle nguồn ngoài/PoE. Nếu USB là nguồn duy nhất,
+   rút/cắm lại USB và chờ đúng COM port xuất hiện lại; không tự đổi sang cổng khác.
+6. Dừng ngay nếu có lỗi BSP, I2C/TCA, safe-state, boot loop, panic, watchdog,
+   hoặc profile làm firmware không boot.
+7. Thoát monitor bằng `Ctrl + ]`, lưu boot log nguyên vẹn và cung cấp log để
+   review. Không suy diễn trạng thái điện của DI/DO từ flash success hoặc log
+   phần mềm đơn thuần.
+
+HIL vật lý do người vận hành thực hiện trong ESP-IDF terminal. Automation và
+review tài liệu không được tự mở COM port, flash lại hoặc chạy monitor.
 
 ## Stage 2 — DI và BOOT button
 

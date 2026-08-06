@@ -14,7 +14,11 @@
 - [ ] `idf.py set-target esp32s3`
 - [ ] `idf.py fullclean`
 - [ ] `idf.py build`
-- [ ] `idf.py -p <verified-port> flash monitor`
+- [ ] `idf.py -p <verified-port> flash`
+- [ ] `idf.py -p <verified-port> monitor`
+- [ ] Power-cycle nguồn ngoài/PoE trong khi giữ USB serial, hoặc rút/cắm lại
+      USB nếu USB là nguồn duy nhất. Board không có nút RESET/EN vật lý.
+- [ ] Nếu COM port tạm biến mất, chờ đúng cổng trở lại; không đổi sang cổng khác.
 - [ ] Log ESP-IDF version, chip revision và reset reason.
 - [ ] Log Flash/PSRAM detected và so sánh profile N16R8.
 - [ ] Log partition table.
@@ -28,7 +32,9 @@
 
 ## Bằng chứng và trạng thái
 
-- [ ] Lưu raw boot log trong `docs/testing/hil-results/` cùng ngày, board identifier và HEAD commit.
+- [ ] Sao chép mẫu trong `docs/testing/hil-results/README.md` thành
+      `HIL-YYYYMMDD-board-<identifier>.md` và điền bằng chứng thực tế.
+- [ ] Lưu boot log liên quan cùng ngày, board identifier và HEAD commit.
 - [ ] Ghi build, flash, monitor, observed/unobserved physical results và warning/error.
 - [ ] Không dùng flash success làm bằng chứng `VERIFIED_HARDWARE_TEST`.
 - [ ] Chỉ cập nhật pin-map/open issues khi bằng chứng phần cứng tương ứng đã được ghi lại.
