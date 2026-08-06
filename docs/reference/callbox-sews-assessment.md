@@ -6,7 +6,7 @@ architectural base for this repository.
 
 | Reference item | Assessment | Reuse decision / destination |
 |---|---|---|
-| `dependencies.lock` | Declares ESP-IDF `6.1.0`, target `esp32s3`. | Environment evidence only; recorded in [Windows clean-build record](../testing/windows-clean-build.md). |
+| `dependencies.lock` | Declares ESP-IDF `6.1.0`, target `esp32s3`. | Historical environment evidence only; it does not select this platform's v6.0.1 stable toolchain. |
 | root `CMakeLists.txt` | A conventional ESP-IDF project setup. | Not copied; this project has explicit Phase 0-1 component directories. |
 | `build-win` log | Shows a historical Windows build with `C:\Espressif\v6.1-dev\esp-idf`, CMake 4.0.3, and Xtensa 15.2. | Environment clue only; no generated files or cache reused. |
 | `sdkconfig` | Uses 2 MB DIO Flash and no PSRAM. | Rejected: conflicts with the current N16R8 expected profile. |

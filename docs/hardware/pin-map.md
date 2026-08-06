@@ -25,8 +25,8 @@ Sources: [Waveshare product page](https://www.waveshare.com/esp32-s3-poe-eth-8di
 |---:|---|---|---|
 | GPIO0 | BOOT button | VERIFIED_VENDOR_DOC | BSP boot input; pressed polarity is provisional. |
 | GPIO1 | Analog-capable; no board function implemented | RESERVED | Do not use. |
-| GPIO2 | CAN RX | VERIFIED_VENDOR_DEMO | Reserved; CAN is out of scope. |
-| GPIO3 | CAN TX | VERIFIED_VENDOR_DEMO | Reserved; CAN is out of scope. |
+| GPIO2 | CAN TX | VERIFIED_VENDOR_DEMO | Reserved; CAN is out of scope. Official demo maps `TXD2` to GPIO2. |
+| GPIO3 | CAN RX | VERIFIED_VENDOR_DEMO | Reserved; CAN is out of scope. Official demo maps `RXD2` to GPIO3. |
 | GPIO4 | DI1 | VERIFIED_VENDOR_DEMO | BSP DI; logical polarity is provisional. |
 | GPIO5 | DI2 | VERIFIED_VENDOR_DEMO | BSP DI; logical polarity is provisional. |
 | GPIO6 | DI3 | VERIFIED_VENDOR_DEMO | BSP DI; logical polarity is provisional. |

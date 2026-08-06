@@ -2,10 +2,10 @@
 
 | Area | Status | Evidence / limitation |
 |---|---|---|
-| Build | VERIFIED with local ESP-IDF `v6.1-dev` | Windows clean `set-target`, `fullclean`, and `build` passed on 2026-08-05. The final application image is `0x388a0`; exact v6.1.0 release parity remains pending. |
-| Unit test | NOT VERIFIED | `tests/host/bsp_do_state_test.c` covers logical-mask translation and commit semantics, but this Windows host has no native C toolchain/SDK to execute it. The ESP-IDF target build does compile `bsp_do_state.c`. |
+| Windows build | COMPILED; release parity not verified | On 2026-08-06, `set-target`, `fullclean`, and `build` passed with the v6.0.1 root tag (`8c19b156084a0753687347cca1f5355782893533`) and separately installed v6.0.1 tools. It produced one 217,776-byte firmware. The local shallow ESP-IDF clone reported `v6.0.1-dirty` because several unused submodules were incomplete; this cannot verify pristine-release parity. See [Windows record](windows-clean-build.md). |
+| Unit test | NOT VERIFIED locally | `tests/host/bsp_do_state_test.c` covers active-high/active-low translation, nonzero safe masks, desired-versus-applied state, and `applied_valid` before/after commit. This Windows shell has no native C compiler on `PATH`; the independent GitHub Actions host-test job is the authoritative pending run. |
 | Hardware test | NOT VERIFIED | No board was flashed or monitored. No pin is marked `VERIFIED_HARDWARE_TEST`. |
-| CI | NOT VERIFIED | Workflow is pinned to `espressif/idf:v6.1.0`. GitHub Actions runs `31002025705` and `31002063222` failed before `idf.py`: Docker Hub reported `manifest unknown` for that exact tag. No mutable alternative tag was substituted. |
+| CI | NOT VERIFIED | The former `espressif/idf:v6.1.0` job could not start because the exact image tag had no manifest. This revision uses the exact stable `espressif/idf:v6.0.1` tag plus a native host-test job; it must execute successfully before CI is reported as passed. |
 
 HIL must record the exact board revision, Flash/PSRAM detection, DI raw state
 while actuating each input, RGB/buzzer observation, and output measurement

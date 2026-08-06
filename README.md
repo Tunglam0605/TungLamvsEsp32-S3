@@ -6,7 +6,7 @@ foundation, not Callbox, AGV, or WCS business logic.
 
 ## Current scope: v0.1.0 foundation and BSP core
 
-- ESP-IDF project pinned to **v6.1.0** and target `esp32s3`.
+- ESP-IDF project pinned to official stable **v6.0.1** and target `esp32s3`.
 - Default expected profile: ESP32-S3-WROOM-1U-N16R8 (16 MB Flash / 8 MB
   PSRAM). Runtime diagnostics warn when detected hardware differs.
 - TCA9554 low-level driver and Waveshare BSP for DI, DO, I2C, buzzer, RGB,
@@ -19,8 +19,8 @@ GPIO21 RS485/SD conflict, before enabling unimplemented peripherals.
 
 ## Windows setup and clean build
 
-Use an ESP-IDF v6.1.0 environment. In Espressif PowerShell, or after running
-the v6.1.0 `export.ps1` script:
+Use an ESP-IDF v6.0.1 environment. In Espressif PowerShell, or after running
+the v6.0.1 `export.ps1` script:
 
 ```powershell
 idf.py --version
@@ -56,13 +56,13 @@ or product MQTT topics to this repository.
 
 ## Verification status
 
-- Build: Windows clean build passed with the installed ESP-IDF `v6.1-dev`
-  checkout; exact `v6.1.0` release parity remains pending.
-- Unit tests: host test is present but not executable on this machine because
-  no native host C toolchain/SDK is installed.
+- Build: exact ESP-IDF `v6.0.1` clean-build verification is recorded in the
+  test status; the earlier `v6.1-dev` compilation is historical only.
+- Unit tests: host test covers DO state transitions and is run independently
+  in CI; see the recorded test status for the latest verified result.
 - Hardware test: not verified on physical hardware.
-- CI: workflow is pinned to ESP-IDF `v6.1.0`; its two remote runs failed
-  before the build because that exact Docker image tag has no manifest.
+- CI: ESP-IDF clean build uses the immutable stable image tag
+  `espressif/idf:v6.0.1`, alongside a native host-test job.
 
 See the detailed [verification status](docs/testing/verification-status.md)
 and [Callbox reference assessment](docs/reference/callbox-sews-assessment.md).
