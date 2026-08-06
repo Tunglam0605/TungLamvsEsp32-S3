@@ -1,0 +1,30 @@
+name: ESP-IDF v6.0.1 clean build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  clean-build:
+    runs-on: ubuntu-latest
+    container: espressif/idf:v6.0.1
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set target and clean build
+        shell: bash
+        run: |
+          . "$IDF_PATH/export.sh"
+          idf.py set-target esp32s3
+          idf.py fullclean
+          idf.py build
+
+  host-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure host tests
+        run: cmake -S tests/host -B tests/host/build
+      - name: Build host tests
+        run: cmake --build tests/host/build
+      - name: Run host tests
+        run: ctest --test-dir tests/host/build --output-on-failure

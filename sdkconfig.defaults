@@ -1,0 +1,15 @@
+CONFIG_IDF_TARGET="esp32s3"
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+CONFIG_MONITOR_BAUD=115200
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# Stage 1 safety interlock: keep all DO sequence code disabled unless a
+# separately reviewed HIL configuration explicitly enables it.
+# CONFIG_PLATFORM_HARDWARE_TEST_RUN_OUTPUT_SEQUENCE is not set
+
+# Phase 0-1 has no wireless transport or Bluetooth feature. The root CMake
+# COMPONENTS allow-list excludes their ESP-IDF components from this firmware.
