@@ -11,7 +11,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Set target and clean build
+        shell: bash
         run: |
+          . "$IDF_PATH/export.sh"
           idf.py set-target esp32s3
           idf.py fullclean
           idf.py build
