@@ -122,6 +122,27 @@ static esp_err_t board_hardware_test_set_rgb_and_wait(uint8_t red, uint8_t green
     return ESP_OK;
 }
 
+static esp_err_t board_hardware_test_log_do_status(const char *context)
+{
+    bsp_do_status_t do_status;
+    const esp_err_t err = bsp_do_get_status(&do_status);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to obtain DO state after %s: %s",
+                 context,
+                 esp_err_to_name(err));
+        return err;
+    }
+
+    ESP_LOGI(TAG,
+             "DO state after %s: desired=0x%02x applied=0x%02x valid=%d safe=0x%02x",
+             context,
+             do_status.desired_mask,
+             do_status.applied_mask,
+             do_status.applied_valid,
+             do_status.safe_mask);
+    return ESP_OK;
+}
+
 static esp_err_t board_hardware_test_run_indicator_test(void)
 {
     esp_err_t err = board_hardware_test_set_rgb_and_wait(32, 0, 0);
@@ -167,15 +188,25 @@ static esp_err_t board_hardware_test_run_optional_output_sequence(void)
     ESP_LOGW(TAG, "Starting enabled DO sequence; attached loads may actuate");
     for (bsp_do_channel_t channel = BSP_DO_1; channel < BSP_DO_COUNT; ++channel) {
         ESP_LOGI(TAG, "Testing DO%d", channel + 1);
-        sequence_err = bsp_do_write(channel, true);
-        if (sequence_err != ESP_OK) {
-            ESP_LOGE(TAG, "DO%d enable failed: %s", channel + 1, esp_err_to_name(sequence_err));
+        esp_err_t step_err = bsp_do_write(channel, true);
+        const esp_err_t status_err = board_hardware_test_log_do_status("DO enable request");
+        if (step_err == ESP_OK && status_err != ESP_OK) {
+            step_err = status_err;
+        }
+        if (step_err != ESP_OK) {
+            ESP_LOGE(TAG, "DO%d enable failed: %s", channel + 1, esp_err_to_name(step_err));
+            sequence_err = step_err;
             break;
         }
         vTaskDelay(pdMS_TO_TICKS(250));
-        sequence_err = bsp_do_write(channel, false);
-        if (sequence_err != ESP_OK) {
-            ESP_LOGE(TAG, "DO%d disable failed: %s", channel + 1, esp_err_to_name(sequence_err));
+        step_err = bsp_do_write(channel, false);
+        const esp_err_t disable_status_err = board_hardware_test_log_do_status("DO disable request");
+        if (step_err == ESP_OK && disable_status_err != ESP_OK) {
+            step_err = disable_status_err;
+        }
+        if (step_err != ESP_OK) {
+            ESP_LOGE(TAG, "DO%d disable failed: %s", channel + 1, esp_err_to_name(step_err));
+            sequence_err = step_err;
             break;
         }
     }
@@ -186,7 +217,13 @@ static esp_err_t board_hardware_test_run_optional_output_sequence(void)
     const esp_err_t err = bsp_do_apply_safe_state();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to restore DO safe state: %s", esp_err_to_name(err));
+    }
+    const esp_err_t safe_status_err = board_hardware_test_log_do_status("safe-state restore");
+    if (err != ESP_OK) {
         return err;
+    }
+    if (safe_status_err != ESP_OK) {
+        return safe_status_err;
     }
     return sequence_err;
 }
@@ -247,18 +284,12 @@ esp_err_t board_hardware_test_start(void)
     }
     ESP_LOGI(TAG, "BOOT button currently %s (provisional active-low interpretation)",
              boot_pressed ? "pressed" : "released");
-    bsp_do_status_t do_status;
-    err = bsp_do_get_status(&do_status);
+    ESP_LOGI(TAG, "Provisional logical DO ON maps to register %s",
+             bsp_do_uses_provisional_active_high() ? "HIGH" : "LOW");
+    err = board_hardware_test_log_do_status("BSP initialization");
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to obtain DO state: %s", esp_err_to_name(err));
         return err;
     }
-    ESP_LOGI(TAG, "DO masks: desired=0x%02x applied=0x%02x valid=%d safe=0x%02x; provisional ON=%s",
-             do_status.desired_mask,
-             do_status.applied_mask,
-             do_status.applied_valid,
-             do_status.safe_mask,
-             bsp_do_uses_provisional_active_high() ? "register HIGH" : "register LOW");
 
     err = board_hardware_test_run_indicator_test();
     if (err != ESP_OK) {
