@@ -1,0 +1,57 @@
+menu "Callbox SEWS Configuration"
+
+    config CALLBOX_ID
+        string "Callbox ID"
+        default "cb01"
+        help
+            Unique identifier for this callbox (e.g., cb01, cb02, etc.)
+
+    config WIFI_SSID
+        string "WiFi SSID"
+        default "SHWS-CU200"
+        help
+            WiFi network SSID to connect to
+
+    config WIFI_PASSWORD
+        string "WiFi Password"
+        default "1234567890"
+        help
+            WiFi network password
+
+    config MQTT_BROKER
+        string "MQTT Broker URI"
+        default "mqtt://10.1.200.1:1883"
+        help
+            MQTT broker address (format: mqtt://host:port or mqtts://host:port)
+
+    config MQTT_PORT
+        int "MQTT Port"
+        default 1883
+        help
+            MQTT broker port number
+
+    config MQTT_USERNAME
+        string "MQTT Username"
+        default "callbox"
+        help
+            MQTT broker username
+
+    config MQTT_PASSWORD
+        string "MQTT Password"
+        default "password123"
+        help
+            MQTT broker password
+
+    config HEARTBEAT_INTERVAL
+        int "Heartbeat Interval (seconds)"
+        default 20
+        help
+            Interval for publishing status/heartbeat messages
+
+    config TASK_TIMEOUT
+        int "Task Response Timeout (seconds)"
+        default 5
+        help
+            Timeout waiting for WCS response to task commands
+
+endmenu

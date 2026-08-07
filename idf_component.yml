@@ -1,0 +1,4 @@
+version: "1.0.0"
+description: AGV Callbox SEWS - MQTT-based Control System
+
+dependencies: {}

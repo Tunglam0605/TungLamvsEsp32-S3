@@ -1,0 +1,14 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "gdbtarget",
+      "request": "attach",
+      "name": "ESP32-S3 USB JTAG (Callbox)",
+      "program": "${workspaceFolder}\\build-win\\callbox_sews.elf",
+      "cwd": "${workspaceFolder}",
+      "runOpenOCD": true,
+      "initialBreakpoint": "app_main"
+    }
+  ]
+}

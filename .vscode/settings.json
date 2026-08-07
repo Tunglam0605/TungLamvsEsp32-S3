@@ -1,0 +1,20 @@
+{
+  "idf.currentSetup": "C:\\Espressif\\v6.1-dev\\esp-idf",
+  "idf.buildPathWin": "${workspaceFolder}\\build-win",
+  "idf.portWin": "COM15",
+  "idf.monitorPort": "COM15",
+  "idf.monitorBaudRate": "115200",
+  "idf.openOcdConfigs": [
+    "board/esp32s3-builtin.cfg"
+  ],
+  "idf.launchMonitorOnDebugSession": true,
+  "idf.customExtraVars": {
+    "IDF_PATH": "C:\\Espressif\\v6.1-dev\\esp-idf",
+    "IDF_TOOLS_PATH": "C:\\Espressif\\tools",
+    "IDF_PYTHON_ENV_PATH": "C:\\Espressif\\tools\\python\\v6.1-dev\\venv",
+    "PYTHON": "C:\\Espressif\\tools\\python\\v6.1-dev\\venv\\Scripts\\python.exe",
+    "PYTHONPATH": "C:\\Users\\Admin\\Documents\\ESP32\\callbox_sews\\.vscode\\python",
+    "ESP_IDF_VERSION": "6.1",
+    "PROCESSOR_ARCHITECTURE": "AMD64"
+  }
+}

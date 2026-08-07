@@ -1,0 +1,3 @@
+dependencies:
+  # ESP-IDF v6 moved the W5500 MAC/PHY driver into this managed component.
+  espressif/w5500: "^2.0.0"

@@ -1,0 +1,202 @@
+/**
+ * @file    bsp_eth.c
+ * @brief   Triển khai giao diện Ethernet W5500 cho board Waveshare.
+ *
+ *          W5500 được điều khiển qua SPI2 host, 20 MHz. Có một reset GPIO
+ *          (GPIO 39) được nhấn mạnh khi khởi tạo.
+ *
+ *          ═══ SƠ ĐỒ CHÂN ═══
+ *          ┌──────────┬──────────┬──────────────────────────────┐
+ *          │ INT      │ GPIO 12  │ Ngắt W5500                   │
+ *          │ MOSI     │ GPIO 13  │ SPI MOSI                     │
+ *          │ MISO     │ GPIO 14  │ SPI MISO                     │
+ *          │ SCLK     │ GPIO 15  │ SPI clock                    │
+ *          │ CS       │ GPIO 16  │ Chip select                  │
+ *          │ RESET    │ GPIO 39  │ Reset (hạ thấp 10ms, nhả)    │
+ *          └──────────┴──────────┴──────────────────────────────┘
+ *
+ * @note    Đăng ký sự kiện ETHERNET_EVENT và IP_EVENT_ETH_GOT_IP để cập
+ *          nhật s_eth_has_ip. bsp_eth_is_connected() phản ánh trạng thái IP.
+ *
+ * @author  TungLamAutomation <tunglam652004@gmail.com>
+ * @version 1.0.0
+ * @date    2026
+ *
+ * @see     bsp_eth.h — API Ethernet
+ * @see     wifi_init.c — network_is_connected() dùng chung Wi-Fi + Ethernet
+ */
+#include "bsp_eth.h"
+
+#include "driver/gpio.h"
+#include "driver/spi_master.h"
+#include "esp_check.h"
+#include "esp_eth.h"
+#include "esp_eth_mac_w5500.h"
+#include "esp_eth_phy_w5500.h"
+#include "esp_event.h"
+#include "esp_log.h"
+#include "esp_netif.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+static const char *TAG = "BSP_ETH";
+
+#define BSP_ETH_INT_GPIO  GPIO_NUM_12
+#define BSP_ETH_MOSI_GPIO GPIO_NUM_13
+#define BSP_ETH_MISO_GPIO GPIO_NUM_14
+#define BSP_ETH_SCLK_GPIO GPIO_NUM_15
+#define BSP_ETH_CS_GPIO   GPIO_NUM_16
+#define BSP_ETH_RST_GPIO  GPIO_NUM_39
+#define BSP_ETH_SPI_HOST  SPI2_HOST
+#define BSP_ETH_SPI_HZ    (20 * 1000 * 1000)
+
+static esp_eth_handle_t s_eth_handle;
+static bool s_eth_has_ip;
+
+/*
+ * Xử lý sự kiện liên kết Ethernet:
+ *  - CONNECTED: dây đã cắm và liên kết ổn định (chưa chắc có IP)
+ *  - DISCONNECTED: mất dây/liên kết → chắc chắn mất IP, reset cờ.
+ */
+static void eth_event_handler(void *arg, esp_event_base_t event_base,
+                              int32_t event_id, void *event_data)
+{
+    if (event_id == ETHERNET_EVENT_CONNECTED) {
+        ESP_LOGI(TAG, "W5500 link up");
+    } else if (event_id == ETHERNET_EVENT_DISCONNECTED) {
+        s_eth_has_ip = false;
+        ESP_LOGW(TAG, "W5500 link down");
+    }
+}
+
+/*
+ * Xử lý khi Ethernet có IP (sự kiện IP_EVENT_ETH_GOT_IP).
+ * Đây là dấu hiệu duy nhất để báo "mạng Ethernet sẵn sàng".
+ */
+static void eth_got_ip_handler(void *arg, esp_event_base_t event_base,
+                               int32_t event_id, void *event_data)
+{
+    ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
+    s_eth_has_ip = true;
+    ESP_LOGI(TAG, "W5500 got IP: " IPSTR, IP2STR(&event->ip_info.ip));
+}
+
+/*
+ * Reset phần cứng W5500 bằng xung thấp:
+ *   1) Cấu hình chân RST là output
+ *   2) Hạ xuống 0 (assert) trong 10ms
+ *   3) Nâng lên 1 (release) rồi đợi 100ms cho chip ổn định
+ * Đây là bước bắt buộc trước khi SPI giao tiếp với W5500.
+ */
+static esp_err_t w5500_reset(void)
+{
+    gpio_config_t cfg = {
+        .pin_bit_mask = 1ULL << BSP_ETH_RST_GPIO,
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    ESP_RETURN_ON_ERROR(gpio_config(&cfg), TAG, "configure W5500 reset pin");
+    ESP_RETURN_ON_ERROR(gpio_set_level(BSP_ETH_RST_GPIO, 0), TAG, "assert W5500 reset");
+    vTaskDelay(pdMS_TO_TICKS(10));
+    ESP_RETURN_ON_ERROR(gpio_set_level(BSP_ETH_RST_GPIO, 1), TAG, "release W5500 reset");
+    vTaskDelay(pdMS_TO_TICKS(100));
+    return ESP_OK;
+}
+
+esp_err_t bsp_eth_init(void)
+{
+    /* Bảo vệ: nếu driver đã cài đặt thì không khởi tạo lại (tránh hỏng SPI). */
+    if (s_eth_handle != NULL) {
+        return ESP_OK;
+    }
+
+    /* BƯỚC 1 — Reset W5500 về trạng thái sạch. */
+    ESP_RETURN_ON_ERROR(w5500_reset(), TAG, "reset W5500");
+
+    /* BƯỚC 2 — Cài dịch vụ ISR cho GPIO (chân INT của W5500 cần ngắt).
+     * Nếu đã cài ở nơi khác (ESP_ERR_INVALID_STATE) thì vẫn chấp nhận. */
+    esp_err_t ret = gpio_install_isr_service(0);
+    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
+        return ret;
+    }
+
+    /*
+     * BƯỚC 3 — Khởi tạo bus SPI 2 với 3 dây MOSI/MISO/SCLK.
+     * quadwp/quadhd = -1: không dùng chế độ 4-dây (chỉ SPI mode 0, 3 dây).
+     * DMA tự chọn (SPI_DMA_CH_AUTO) để truyền khối hiệu quả.
+     */
+    spi_bus_config_t bus_cfg = {
+        .mosi_io_num = BSP_ETH_MOSI_GPIO,
+        .miso_io_num = BSP_ETH_MISO_GPIO,
+        .sclk_io_num = BSP_ETH_SCLK_GPIO,
+        .quadwp_io_num = -1,
+        .quadhd_io_num = -1,
+    };
+    ESP_RETURN_ON_ERROR(spi_bus_initialize(BSP_ETH_SPI_HOST, &bus_cfg, SPI_DMA_CH_AUTO),
+                        TAG, "initialize W5500 SPI bus");
+
+    /*
+     * BƯỚC 4 — Cấu hình thiết bị SPI trên bus (CS = GPIO 16, 20 MHz, mode 0).
+     * queue_size=20: độ sâu hàng đợi giao dịch SPI.
+     */
+    spi_device_interface_config_t dev_cfg = {
+        .mode = 0,
+        .clock_speed_hz = BSP_ETH_SPI_HZ,
+        .spics_io_num = BSP_ETH_CS_GPIO,
+        .queue_size = 20,
+    };
+    eth_w5500_config_t w5500_cfg = ETH_W5500_DEFAULT_CONFIG(BSP_ETH_SPI_HOST, &dev_cfg);
+    w5500_cfg.base.int_gpio_num = BSP_ETH_INT_GPIO;
+
+    /* Cấu hình MAC/PHY mặc định; PHY không dùng chân reset riêng. */
+    eth_mac_config_t mac_cfg = ETH_MAC_DEFAULT_CONFIG();
+    eth_phy_config_t phy_cfg = ETH_PHY_DEFAULT_CONFIG();
+    phy_cfg.reset_gpio_num = -1;
+
+    /* Tạo đối tượng MAC và PHY cho W5500 (driver esp_eth). */
+    esp_eth_mac_t *mac = esp_eth_mac_new_w5500(&w5500_cfg, &mac_cfg);
+    esp_eth_phy_t *phy = esp_eth_phy_new_w5500(&phy_cfg);
+    if (mac == NULL || phy == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    /* BƯỚC 5 — Cài đặt driver esp_eth với MAC+PHY đã tạo. */
+    esp_eth_config_t eth_cfg = ETH_DEFAULT_CONFIG(mac, phy);
+    ESP_RETURN_ON_ERROR(esp_eth_driver_install(&eth_cfg, &s_eth_handle), TAG,
+                        "install W5500 driver");
+
+    /*
+     * BƯỚC 6 — Gắn Ethernet vào esp-netif (tầng TCP/IP).
+     * esp_netif_attach + glue sẽ đưa gói tin W5500 vào stack LWIP.
+     */
+    esp_netif_config_t netif_cfg = ESP_NETIF_DEFAULT_ETH();
+    esp_netif_t *netif = esp_netif_new(&netif_cfg);
+    if (netif == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+    ESP_RETURN_ON_ERROR(esp_netif_attach(netif, esp_eth_new_netif_glue(s_eth_handle)), TAG,
+                        "attach W5500 netif");
+
+    /* BƯỚC 7 — Đăng ký sự kiện link và sự kiện có IP. */
+    ESP_RETURN_ON_ERROR(esp_event_handler_register(ETH_EVENT, ESP_EVENT_ANY_ID,
+                                                   eth_event_handler, NULL), TAG,
+                        "register Ethernet event handler");
+    ESP_RETURN_ON_ERROR(esp_event_handler_register(IP_EVENT, IP_EVENT_ETH_GOT_IP,
+                                                   eth_got_ip_handler, NULL), TAG,
+                        "register Ethernet IP handler");
+
+    /* BƯỚC 8 — Bắt đầu hoạt động Ethernet. */
+    ESP_RETURN_ON_ERROR(esp_eth_start(s_eth_handle), TAG, "start W5500");
+
+    ESP_LOGI(TAG, "W5500 initialized (SPI2: INT=%d MOSI=%d MISO=%d SCLK=%d CS=%d RST=%d)",
+             BSP_ETH_INT_GPIO, BSP_ETH_MOSI_GPIO, BSP_ETH_MISO_GPIO,
+             BSP_ETH_SCLK_GPIO, BSP_ETH_CS_GPIO, BSP_ETH_RST_GPIO);
+    return ESP_OK;
+}
+
+bool bsp_eth_is_connected(void)
+{
+    return s_eth_has_ip;
+}

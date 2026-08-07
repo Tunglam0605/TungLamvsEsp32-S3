@@ -1,0 +1,165 @@
+/**
+ * @file    bsp_do.c
+ * @brief   Triển khai driver đầu ra số (8DO) cho board Waveshare 8DI/8DO.
+ *
+ *          8 đầu ra được điều khiển qua IC mở rộng TCA9554PWR trên I2C.
+ *          Trạng thái thực tế được lưu trong shadow register (s_out_shadow)
+ *          để đọc lại mà không cần giao dịch I2C.
+ *
+ *          ═══ I2C CỦA EXPANDER ═══
+ *          ┌──────────────┬──────────────┐
+ *          │ SCL          │ GPIO 41      │
+ *          │ SDA          │ GPIO 42      │
+ *          │ I2C port     │ I2C_NUM_1    │
+ *          │ Tần số       │ 400 kHz      │
+ *          └──────────────┴──────────────┘
+ *
+ * @note    Đầu ra active-low: shadow bit = 1 khi đầu ra được kích hoạt
+ *          (mức logic 0 trên chân). Shadow khởi tạo 0xFF = tất cả OFF.
+ *
+ * @author  TungLamAutomation <tunglam652004@gmail.com>
+ * @version 1.0.0
+ * @date    2026
+ *
+ * @see     bsp_do.h — API đầu ra số
+ * @see     bsp_expander.c — driver TCA9554 cấp thấp
+ */
+#include "bsp_do.h"
+#include "bsp_board.h"
+#include "bsp_expander.h"
+#include "driver/gpio.h"
+#include "esp_log.h"
+#include "freertos/semphr.h"
+
+static const char *TAG = "BSP_DO";
+
+/*
+ * Biến toàn cục: instance expander + shadow register của đầu ra.
+ *
+ * Gán chân I2C cho TCA9554PWR trên board Waveshare:
+ *   SCL = GPIO41, SDA = GPIO42, I2C_NUM_1, 400 kHz.
+ * Đầu ra active-low: bit shadow = 1 khi đầu ra được kích hoạt
+ * (mức logic 0 trên chân).
+ */
+#define BSP_I2C_PORT        I2C_NUM_1
+#define BSP_I2C_SCL_GPIO    GPIO_NUM_41
+#define BSP_I2C_SDA_GPIO    GPIO_NUM_42
+#define BSP_I2C_FREQ_HZ     400000
+#define BSP_DO_MUTEX_TIMEOUT_MS 50U
+
+static bsp_expander_t s_expander;
+static uint8_t s_out_shadow = 0xFF;   /* 0xFF = tất cả inactive (active-low) */
+static SemaphoreHandle_t s_do_mutex = NULL;
+
+esp_err_t bsp_do_init(void)
+{
+    s_do_mutex = xSemaphoreCreateMutex();
+    if (s_do_mutex == NULL) {
+        ESP_LOGE(TAG, "Failed to create DO mutex");
+        return ESP_ERR_NO_MEM;
+    }
+
+    /*
+     * BƯỚC 1 — Tạo bus I2C master.
+     *   - i2c_port: I2C_NUM_1 (chọn controller thứ 2 của ESP32-S3)
+     *   - scl/sda: GPIO 41/42 theo sơ đồ harvest board
+     *   - glitch_ignore_cnt: 7 — bỏ qua nhiễu SCL ngắn
+     *   - enable_internal_pullup: dùng điện trở kéo lên nội bộ cho SDA/SCL
+     */
+    i2c_master_bus_config_t bus_cfg = {
+        .i2c_port        = BSP_I2C_PORT,
+        .sda_io_num      = BSP_I2C_SDA_GPIO,
+        .scl_io_num      = BSP_I2C_SCL_GPIO,
+        .clk_source      = I2C_CLK_SRC_DEFAULT,
+        .glitch_ignore_cnt = 7,
+        .flags.enable_internal_pullup = true,
+    };
+
+    esp_err_t ret = i2c_new_master_bus(&bus_cfg, &s_expander.bus);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to create I2C bus: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    /* BƯỚC 2 — Khởi tạo IC mở rộng trên bus vừa tạo.
+     * outputs_all_low = false: sau khi init, 8 đầu ra tắt (0xFF). */
+    ret = bsp_expander_init(&s_expander, s_expander.bus, BSP_I2C_FREQ_HZ, false);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to init expander: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    /* BƯỚC 3 — Đồng bộ shadow với phần cứng: ghi 0xFF → tất cả OFF.
+     * Giữ shadow và chip luôn khớp nhau để bsp_do_write sau này chỉ việc
+     * sửa bit trong shadow rồi ghi toàn bộ 1 lần. */
+    s_out_shadow = 0xFF;
+    ret = bsp_expander_write_all(&s_expander, s_out_shadow);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to init outputs: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ESP_LOGI(TAG, "Digital outputs ready (TCA9554, all OFF)");
+    return ESP_OK;
+}
+
+esp_err_t bsp_do_write(bsp_do_channel_t channel, bool active)
+{
+    /* Kiểm tra kênh hợp lệ (0..7) trước khi tính toán bit. */
+    if (channel < 0 || channel >= BSP_DO_COUNT) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Cập nhật 1 bit trong shadow theo yêu cầu:
+     *   - active = true  → xóa bit  (0)   → đầu ra kích hoạt (logic 0)
+     *   - active = false → set bit  (1)   → đầu ra tắt (logic 1)
+     * Không ghi trực tiếp 1 kênh mà thay vào toàn bộ shadow bên dưới. */
+    if (xSemaphoreTake(s_do_mutex, pdMS_TO_TICKS(BSP_DO_MUTEX_TIMEOUT_MS)) != pdTRUE) {
+        ESP_LOGW(TAG, "DO mutex timeout; skipping channel %d write", channel + 1);
+        return ESP_ERR_TIMEOUT;
+    }
+    if (active) s_out_shadow &= ~(1u << channel);
+    else s_out_shadow |= (1u << channel);
+    esp_err_t ret = bsp_expander_write_all(&s_expander, s_out_shadow);
+    xSemaphoreGive(s_do_mutex);
+    return ret;
+}
+
+esp_err_t bsp_do_write_mask(uint8_t active_mask)
+{
+    /* Đảo bitmask để ra shadow thực: bit set = active → xóa bit đó trong
+     * shadow (active-low). Ví dụ: active_mask=0b00000001 → shadow=0b11111110. */
+    if (xSemaphoreTake(s_do_mutex, pdMS_TO_TICKS(BSP_DO_MUTEX_TIMEOUT_MS)) != pdTRUE) {
+        ESP_LOGW(TAG, "DO mutex timeout; skipping mask write");
+        return ESP_ERR_TIMEOUT;
+    }
+    s_out_shadow = (uint8_t)(~active_mask);
+    esp_err_t ret = bsp_expander_write_all(&s_expander, s_out_shadow);
+    xSemaphoreGive(s_do_mutex);
+    return ret;
+}
+
+uint8_t bsp_do_get_shadow(void)
+{
+    /* Trả về trạng thái điện thực tế (0=ON, 1=OFF trên từng chân). */
+    uint8_t shadow = s_out_shadow;
+    if (s_do_mutex != NULL &&
+        xSemaphoreTake(s_do_mutex, pdMS_TO_TICKS(BSP_DO_MUTEX_TIMEOUT_MS)) == pdTRUE) {
+        shadow = s_out_shadow;
+        xSemaphoreGive(s_do_mutex);
+    }
+    return shadow;
+}
+
+uint8_t bsp_do_get_active_mask(void)
+{
+    /* Đảo lại shadow để trả về "bit set = đầu ra đang hoạt động".
+     * Đây là dạng dễ dùng cho logic ứng dụng (1 = kích hoạt). */
+    return (uint8_t)~bsp_do_get_shadow();
+}
+
+esp_err_t bsp_do_all_off(void)
+{
+    /* Viết tắt: tắt hết = ghi active_mask 0 (không đầu ra nào hoạt động). */
+    return bsp_do_write_mask(0x00);
+}

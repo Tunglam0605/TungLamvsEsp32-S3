@@ -1,0 +1,13 @@
+# ESP-IDF build outputs
+/build/
+/build-win/
+/managed_components/
+
+# Local ESP-IDF installer state and diagnostic logs
+/eim_config.toml
+/eim-*.log
+/idf-build-win*.log
+/idf-driver-*.zip
+
+# Generated Python cache for the VS Code locale shim
+/.vscode/python/__pycache__/
