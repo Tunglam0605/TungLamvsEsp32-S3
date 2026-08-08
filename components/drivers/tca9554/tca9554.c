@@ -30,10 +30,7 @@ static const char *TAG = "TCA9554";
 #define TCA9554_REG_POLARITY 0x02
 #define TCA9554_REG_CONFIG   0x03
 
-/* Một đường SDA/SCL bị kẹt phải trả về lỗi, không bao giờ chặn ứng dụng
- * vô thời hạn. Ghi 2 byte thông thường của TCA9554 xong trong vài ms;
- * giá trị timeout lấy từ cấu hình instance. */
-#define TCA9554_MS_TIMEOUT_FALLBACK 100U
+#define TCA9554_ADDR_7BIT_MAX 0x7FU   /* Địa chỉ slave 7-bit hợp lệ tối đa */
 
 static bool tca9554_pin_valid(uint8_t pin)
 {
@@ -53,16 +50,17 @@ static esp_err_t tca9554_read_byte(tca9554_t *dev, uint8_t reg, uint8_t *value)
     return i2c_master_transmit_receive(dev->dev, &reg, 1, value, 1, dev->timeout_ms);
 }
 
-esp_err_t tca9554_init(tca9554_t *dev, const tca9554_config_t *config,
-                       uint8_t initial_outputs)
+esp_err_t tca9554_init(tca9554_t *dev, const tca9554_config_t *config)
 {
+    /* Kiểm tra đối số — không silent fallback khi caller truyền sai. */
     if (!dev || !config || !config->bus || config->address == 0 ||
+        config->address > TCA9554_ADDR_7BIT_MAX /* ngoài dải 7-bit */ ||
         config->clock_hz == 0 || config->timeout_ms == 0) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    dev->bus = config->bus;
     dev->timeout_ms = config->timeout_ms;
+    dev->dev = NULL;
 
     i2c_device_config_t device_cfg = {
         .dev_addr_length = I2C_ADDR_BIT_LEN_7,
@@ -71,32 +69,25 @@ esp_err_t tca9554_init(tca9554_t *dev, const tca9554_config_t *config,
     };
     esp_err_t ret = i2c_master_bus_add_device(config->bus, &device_cfg, &dev->dev);
     if (ret != ESP_OK) {
+        /* Add thất bại → không để half-initialized object. */
+        dev->dev = NULL;
         ESP_LOGE(TAG, "Failed to add TCA9554 device at 0x%02X: %s",
                  config->address, esp_err_to_name(ret));
         return ret;
     }
 
-    /* Hướng: tất cả chân làm đầu ra (CONFIG = 0x00). */
-    ret = tca9554_write_byte(dev, TCA9554_REG_CONFIG, 0x00);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to configure TCA9554 outputs: %s", esp_err_to_name(ret));
-        i2c_master_bus_rm_device(dev->dev);
-        dev->dev = NULL;
-        return ret;
-    }
-
-    /* Byte đầu ra điện mức thô ban đầu (vd. 0xFF = mọi đầu ra active-low
-     * đều tắt). */
-    ret = tca9554_write_byte(dev, TCA9554_REG_OUTPUT, initial_outputs);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to init TCA9554 outputs: %s", esp_err_to_name(ret));
-        i2c_master_bus_rm_device(dev->dev);
-        dev->dev = NULL;
-        return ret;
-    }
-
-    ESP_LOGI(TAG, "TCA9554 ready (addr=0x%02X, %lu Hz)", config->address,
+    ESP_LOGI(TAG, "TCA9554 device added (addr=0x%02X, %lu Hz)", config->address,
              (unsigned long)config->clock_hz);
+    return ESP_OK;
+}
+
+esp_err_t tca9554_deinit(tca9554_t *dev)
+{
+    if (!dev) return ESP_ERR_INVALID_ARG;
+    if (dev->dev != NULL) {
+        i2c_master_bus_rm_device(dev->dev);
+        dev->dev = NULL;
+    }
     return ESP_OK;
 }
 

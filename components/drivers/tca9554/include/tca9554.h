@@ -55,30 +55,42 @@ typedef struct {
 /**
  * @brief Instance thiết bị TCA9554 (vùng nhớ do người gọi cấp phát).
  *
- * Chứa handle thiết bị và snapshot cấu hình. Driver không an toàn luồng;
- * người gọi phải tuần tự hóa mọi truy cập.
+ * Chỉ giữ những gì cần cho runtime và deinit: handle thiết bị + timeout.
+ * Bus I2C do người gọi (caller) sở hữu — driver không nắm bus.
+ * Driver không an toàn luồng; người gọi phải tuần tự hóa mọi truy cập.
  */
 typedef struct {
-    i2c_master_bus_handle_t bus;
-    i2c_master_dev_handle_t dev;
-    uint32_t timeout_ms;
+    i2c_master_dev_handle_t dev;   /* Handle thiết bị trên bus (NULL nếu chưa init) */
+    uint32_t timeout_ms;           /* Thời gian chờ mỗi giao dịch I2C (ms) */
 } tca9554_t;
 
 /**
  * @brief Khởi tạo một thiết bị TCA9554 trên bus I2C master đã có sẵn.
  *
- * Thêm thiết bị tại `config->address`, cấu hình tất cả chân là đầu ra,
- * và ghi byte đầu ra an toàn ban đầu.
+ * Chỉ: kiểm tra đối số → thêm device (i2c_master_bus_add_device) → lưu
+ * trạng thái instance. KHÔNG đụng thanh ghi CONFIG/OUTPUT: hướng chân và
+ * trạng thái đầu ra an toàn là policy của BOARD (caller), người gọi gọi
+ * tca9554_set_all_outputs()/tca9554_write_outputs() sau đó nếu cần.
+ *
+ * Init trống → nếu có lỗi, dev->dev được đặt NULL (không half-init).
  *
  * @param dev      Handle cần được điền (vùng nhớ do người gọi cấp).
  * @param config   Bus, địa chỉ, clock và timeout; phải hợp lệ.
- * @param initial_outputs  Byte mức điện thô được ghi sau khi cấu hình
- *                         hướng (vd. 0xFF để đầu ra active-low đều tắt).
- * @return ESP_OK nếu thành công; esp_err_t nếu khác (lỗi giữa chừng không
- *         để rò rỉ tài nguyên — do driver đảm bảo).
+ * @return ESP_OK nếu thành công; esp_err_t nếu có lỗi.
  */
-esp_err_t tca9554_init(tca9554_t *dev, const tca9554_config_t *config,
-                       uint8_t initial_outputs);
+esp_err_t tca9554_init(tca9554_t *dev, const tca9554_config_t *config);
+
+/**
+ * @brief Gỡ thiết bị ra khỏi bus I2C (i2c_master_bus_rm_device).
+ *
+ * Driver KHÔNG sở hữu bus I2C — bus do người gọi sở hữu, nên hàm này
+ * không bao giờ gọi i2c_del_master_bus(). Sau khi gỡ, dev->dev = NULL
+ * (instance có thể khởi tạo lại).
+ *
+ * @param dev  Instance đã init (hoặc dev rỗng → ESP_OK, an toàn gọi nhiều lần).
+ * @return ESP_OK; lỗi nếu đối số không hợp lệ.
+ */
+esp_err_t tca9554_deinit(tca9554_t *dev);
 
 /**
  * @brief Cấu hình tất cả các chân làm đầu ra (CONFIG = 0x00).
@@ -108,12 +120,16 @@ esp_err_t tca9554_write_outputs(tca9554_t *dev, uint8_t outputs);
  * @brief Ghi một bit đầu ra đơn lẻ (read-modify-write của OUTPUT).
  * @param pin    0..7
  * @param level  mức điện thô (0 hoặc 1)
+ * @note  Là nhiều giao dịch I2C (RMW): caller phải tuần tự hóa nếu nhiều
+ *        execution context cùng truy cập thiết bị (driver không mutex).
  */
 esp_err_t tca9554_write_pin(tca9554_t *dev, uint8_t pin, bool level);
 
 /**
  * @brief Đảo một bit đầu ra đơn lẻ (read-modify-write của OUTPUT).
  * @param pin    0..7
+ * @note  Là nhiều giao dịch I2C (RMW); caller phải tuần tự hóa nếu nhiều
+ *        execution context cùng truy cập thiết bị (driver không mutex).
  */
 esp_err_t tca9554_toggle_pin(tca9554_t *dev, uint8_t pin);
 

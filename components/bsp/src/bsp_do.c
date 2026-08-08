@@ -14,8 +14,9 @@
  *          │ Tần số       │ 400 kHz      │
  *          └──────────────┴──────────────┘
  *
- * @note    Đầu ra active-low: shadow bit = 1 khi đầu ra được kích hoạt
- *          (mức logic 0 trên chân). Shadow khởi tạo 0xFF = tất cả OFF.
+ * @note    Đầu ra active-low: shadow bit = 1 → điện HIGH → đầu ra TẮT (OFF);
+ *          shadow bit = 0 → điện LOW → đầu ra KÍCH HOẠT (ON).
+ *          Shadow khởi tạo 0xFF = tất cả OFF.
  *
  * @author  TungLamAutomation <tunglam652004@gmail.com>
  * @version 1.0.0
@@ -37,10 +38,9 @@ static const char *TAG = "BSP_DO";
 /*
  * Biến toàn cục: instance expander + shadow register của đầu ra.
  *
- * Gán chân I2C cho TCA9554PWR trên board Waveshare:
+ * Gọn chân I2C cho TCA9554PWR trên board Waveshare:
  *   SCL = GPIO41, SDA = GPIO42, I2C_NUM_1, 400 kHz.
- * Đầu ra active-low: bit shadow = 1 khi đầu ra được kích hoạt
- * (mức logic 0 trên chân).
+ * Đầu ra active-low: shadow bit 1 → điện HIGH → TẮT; bit 0 → điện LOW → ON.
  */
 #define BSP_I2C_PORT        I2C_NUM_1
 #define BSP_I2C_SCL_GPIO    GPIO_NUM_41
@@ -52,7 +52,8 @@ static const char *TAG = "BSP_DO";
 #define BSP_DO_EXPANDER_TIMEOUT_MS 100U
 #define BSP_DO_MUTEX_TIMEOUT_MS 50U
 
-static tca9554_t s_expander;
+static tca9554_t s_expander;                 /* Instance TCA: chỉ handle device + timeout */
+static i2c_master_bus_handle_t s_i2c_bus = NULL;  /* Bus I2C — BSP sở hữu (tạm thời đến Phase C) */
 static uint8_t s_out_shadow = 0xFF;   /* 0xFF = tất cả inactive (active-low) */
 static SemaphoreHandle_t s_do_mutex = NULL;
 
@@ -67,7 +68,7 @@ esp_err_t bsp_do_init(void)
     /*
      * BƯỚC 1 — Tạo bus I2C master.
      *   - i2c_port: I2C_NUM_1 (chọn controller thứ 2 của ESP32-S3)
-     *   - scl/sda: GPIO 41/42 theo sơ đồ harvest board
+     *   - scl/sda: GPIO 41/42 theo sơ đồ board
      *   - glitch_ignore_cnt: 7 — bỏ qua nhiễu SCL ngắn
      *   - enable_internal_pullup: dùng điện trở kéo lên nội bộ cho SDA/SCL
      */
@@ -80,37 +81,52 @@ esp_err_t bsp_do_init(void)
         .flags.enable_internal_pullup = true,
     };
 
-    esp_err_t ret = i2c_new_master_bus(&bus_cfg, &s_expander.bus);
+    esp_err_t ret = i2c_new_master_bus(&bus_cfg, &s_i2c_bus);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to create I2C bus: %s", esp_err_to_name(ret));
         return ret;
     }
 
-    /* BƯỚC 2 — Khởi tạo IC mở rộng trên bus vừa tạo.
-     * Driver generic nhận address/clock/timeout qua config; BSP truyền
-     * board address 0x20. initial_outputs=0xFF: sau khi init, 8 đầu ra
-     * inactive (đúng active-low). */
+    /* BƯỚC 2 — Gắn IC mở rộng (driver generic chỉ add device; không đụng
+     * thanh ghi). Bus/address/clock/timeout là thông tin board truyền vào. */
     const tca9554_config_t tca_cfg = {
-        .bus = s_expander.bus,
+        .bus = s_i2c_bus,
         .address = BSP_TCA9554_ADDR,
         .clock_hz = BSP_I2C_FREQ_HZ,
         .timeout_ms = BSP_DO_EXPANDER_TIMEOUT_MS,
     };
-    ret = tca9554_init(&s_expander, &tca_cfg, 0xFF);
+    ret = tca9554_init(&s_expander, &tca_cfg);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to init expander: %s", esp_err_to_name(ret));
+        i2c_del_master_bus(s_i2c_bus);
+        s_i2c_bus = NULL;
         return ret;
     }
 
-    /* BƯỚC 3 — Đồng bộ shadow với phần cứng: ghi 0xFF → tất cả OFF.
-     * Giữ shadow và chip luôn khớp nhau để bsp_do_write sau này chỉ việc
-     * sửa bit trong shadow rồi ghi toàn bộ 1 lần. */
-    s_out_shadow = 0xFF;
-    ret = tca9554_write_outputs(&s_expander, s_out_shadow);
+    /* BƯỚC 3 — Trình tự khởi tạo an toàn (không tạo output glitch):
+     *   1) preset thanh ghi OUTPUT = 0xFF (mọi chân điện HIGH = đầu ra
+     *      active-low đều OFF) — latch an toàn sẵn sàng TRƯỚC khi enable.
+     *   2) CONFIG = 0x00 (tất cả chân thành output) — thời điểm sau khi
+     *      latch đã chứa safe state, không output nào bị kích hoạt.
+     *   3) s_out_shadow = 0xFF đồng bộ với phần cứng.
+     * Không đảo thứ tự này. */
+    ret = tca9554_write_outputs(&s_expander, 0xFF);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to init outputs: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Failed to preset OUTPUT safe: %s", esp_err_to_name(ret));
+        tca9554_deinit(&s_expander);
+        i2c_del_master_bus(s_i2c_bus);
+        s_i2c_bus = NULL;
         return ret;
     }
+    ret = tca9554_set_all_outputs(&s_expander);   /* CONFIG = 0x00 */
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to enable outputs: %s", esp_err_to_name(ret));
+        tca9554_deinit(&s_expander);
+        i2c_del_master_bus(s_i2c_bus);
+        s_i2c_bus = NULL;
+        return ret;
+    }
+    s_out_shadow = 0xFF;   /* Đồng bộ shadow với phần cứng (tất cả OFF) */
 
     ESP_LOGI(TAG, "Digital outputs ready (TCA9554, all OFF)");
     return ESP_OK;
