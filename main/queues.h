@@ -1,8 +1,8 @@
 /**
  * @file queues.h
- * @brief Queue plumbing and persisted Callbox configuration only.
+ * @brief Chỉ chứa hàng đợi (queue) và cấu hình Callbox đã lưu bền vững.
  *
- * Domain types belong to mission_types.h, protocol_types.h and app_event.h.
+ * Các kiểu miền thuộc về mission_types.h, protocol_types.h và app_event.h.
  */
 #ifndef CALLBOX_QUEUES_H
 #define CALLBOX_QUEUES_H
@@ -35,7 +35,7 @@ typedef struct {
     char wifi_netmask[16];
     char wifi_gateway[16];
     char wifi_dns[16];
-    /* Primary factory NTP and an optional fallback. Hostname or IPv4 only. */
+    /* NTP nhà máy chính và một fallback tùy chọn. Chỉ hostname hoặc IPv4. */
     char sntp_primary[64];
     char sntp_fallback[64];
     char mqtt_broker[64];
@@ -47,7 +47,7 @@ typedef struct {
     char web_password[64];
 } Config_t;
 
-/* Buzzer command payload is defined by led_control.h. */
+/* Tải trọng lệnh buzzer được định nghĩa bởi led_control.h. */
 extern QueueHandle_t buzzer_queue;
 extern Config_t g_config;
 

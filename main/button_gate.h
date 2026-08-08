@@ -18,7 +18,7 @@
  */
 bool button_gate_accept(const ButtonMsg_t *event);
 
-/** @brief Clear all button latches (used after a controlled reset). */
+/** @brief Xóa mọi latch nút bấm (dùng sau khi reset có kiểm soát). */
 void button_gate_reset(void);
 
 #endif /* CALLBOX_BUTTON_GATE_H */

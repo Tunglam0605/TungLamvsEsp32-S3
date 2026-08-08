@@ -30,10 +30,10 @@
 extern "C" {
 #endif
 
-/** Start the local phone configuration page on the AP+STA web server. */
+/** Bắt đầu trang cấu hình điện thoại cục bộ trên web server AP+STA. */
 esp_err_t config_portal_start(Config_t *config);
 
-/** True while a browser configuration session lease is active. */
+/** True khi còn một phiên cấu hình trình duyệt đang hoạt động. */
 bool config_portal_session_active(void);
 
 #ifdef __cplusplus

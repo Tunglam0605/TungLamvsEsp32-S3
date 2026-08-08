@@ -56,10 +56,10 @@ static uint8_t s_wifi_connected;
 static uint8_t s_sta_configured;
 static uint8_t s_ap_started;
 static volatile uint8_t s_ap_client_count;
-/* Application-owned latch: keep AP alive after a deliberate 5 s Cancel hold. */
+/* Latch do ứng dụng sở hữu: giữ AP sống sau khi giữ nút Cancel 5 giây. */
 static volatile bool s_rescue_ap_enabled;
 static uint8_t s_scan_in_progress;
-/* AP records are large on ESP-IDF; keep them out of the wifi_select task stack. */
+/* Bản ghi AP lớn trên ESP-IDF; giữ chúng ngoài stack của task wifi_select. */
 static wifi_ap_record_t s_scan_records[WIFI_MAX_SCAN_RESULTS];
 static SemaphoreHandle_t s_scan_mutex;
 static volatile bool s_scan_lock_held;
@@ -348,8 +348,9 @@ esp_err_t wifi_init_sta_profiles(const Config_t *config,
         s_profile_count = 1;
     }
     copy_string(s_ap_ssid, sizeof(s_ap_ssid), ap_ssid && ap_ssid[0] ? ap_ssid : "CALLBOX-01");
-    /* Password deliberately mirrors the AP SSID unless a caller explicitly
-     * supplies a value.  This is WPA2-valid and simple for field recovery. */
+    /* Mật khẩu cố tình giống SSID AP trừ khi người gọi cung cấp giá trị
+     * khác. Điều này hợp lệ WPA2 và đơn giản cho việc khôi phục tại hiện
+     * trường. */
     copy_string(s_ap_password, sizeof(s_ap_password),
                 ap_password && ap_password[0] ? ap_password : s_ap_ssid);
 
@@ -569,8 +570,8 @@ esp_err_t wifi_toggle_rescue_ap(bool *enabled)
         return ESP_OK;
     }
 
-    /* Clear the explicit latch first.  If an AP client is still connected,
-     * the normal idle policy will close the AP when it is safe to do so. */
+    /* Xóa latch rõ ràng trước. Nếu vẫn còn client AP kết nối, chính sách
+     * nhàn rỗi bình thường sẽ đóng AP khi an toàn. */
     s_rescue_ap_enabled = false;
     if (enabled) *enabled = false;
     if (s_wifi_connected) {

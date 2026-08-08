@@ -43,8 +43,8 @@
  *         Không phụ thuộc vào điện áp vật lý — tầng BSP đã xử lý active-low.
  */
 typedef struct {
-    uint8_t di_active_mask; /* bit 0 = DI1, active = pressed/energized */
-    uint8_t do_active_mask; /* bit 0 = DO1, active = output energized */
+    uint8_t di_active_mask; /* bit 0 = DI1, bit 1 = đầu vào kích hoạt (nút đang nhấn) */
+    uint8_t do_active_mask; /* bit 0 = DO1, bit 1 = đầu ra đang ON (cấp điện) */
 } io_debug_snapshot_t;
 
 /**

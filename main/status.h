@@ -18,8 +18,8 @@
 #define STATUS_MISSION_COUNT 2
 
 typedef struct {
-    bool level;        /* Stable logical level: true = pressed. */
-    bool pressed_edge; /* One-cycle event set only by button_gate. */
+    bool level;        /* Mức logic ổn định: true = đang nhấn. */
+    bool pressed_edge; /* Sự kiện một chu kỳ, chỉ do button_gate đặt. */
 } status_button_t;
 
 typedef struct {
@@ -40,7 +40,7 @@ typedef struct {
     uint32_t MissionTimestamp[STATUS_MISSION_COUNT];
 } callbox_status_t;
 
-/* Field names intentionally follow the plant-control terminology. */
+/* Tên trường cố tình theo thuật ngữ điều khiển nhà máy (plant-control). */
 extern volatile callbox_status_t status;
 
 void status_init(void);

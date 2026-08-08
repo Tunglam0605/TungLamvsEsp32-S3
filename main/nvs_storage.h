@@ -35,41 +35,41 @@
 #include <stddef.h>
 
 /**
- * @brief Initialize NVS storage
+ * @brief Khởi tạo lưu trữ NVS
  */
 esp_err_t nvs_storage_init(void);
 
 /**
- * @brief Save sequence number to NVS
+ * @brief Lưu số thứ tự vào NVS
  */
 esp_err_t nvs_save_seq_num(uint32_t seq);
 
 /**
- * @brief Load sequence number from NVS
+ * @brief Đọc số thứ tự từ NVS
  */
 esp_err_t nvs_load_seq_num(uint32_t *seq);
 
 /**
- * @brief Load Wi-Fi/MQTT/callbox settings, preserving caller-provided defaults
- *        for keys that have not been saved yet.
+ * @brief Đọc cấu hình Wi-Fi/MQTT/callbox, giữ lại các giá trị mặc định do
+ *        người gọi cung cấp cho các key chưa được lưu.
  */
 esp_err_t nvs_load_config(Config_t *config);
 
-/** @brief Persist Wi-Fi/MQTT/callbox settings and sequence number. */
+/** @brief Lưu vĩnh viễn cấu hình Wi-Fi/MQTT/callbox và số thứ tự. */
 esp_err_t nvs_save_config(const Config_t *config);
 
-/** Add a Wi-Fi network to the remembered list, moving it to highest priority. */
+/** Thêm mạng Wi-Fi vào danh sách nhớ, đưa nó lên ưu tiên cao nhất. */
 void config_add_wifi_profile(Config_t *config, const char *ssid, const char *password);
 
-/** Look up a remembered password for an SSID. */
+/** Tìm mật khẩu đã nhớ cho một SSID. */
 bool config_find_wifi_password(const Config_t *config, const char *ssid,
                               char *password, size_t password_size);
 
-/** Remove one remembered Wi-Fi network. Returns true when it existed. */
+/** Xóa một mạng Wi-Fi đã nhớ. Trả về true khi nó từng tồn tại. */
 bool config_remove_wifi_profile(Config_t *config, const char *ssid);
 
 /**
- * @brief Erase all NVS data
+ * @brief Xóa toàn bộ dữ liệu NVS
  */
 esp_err_t nvs_storage_erase_all(void);
 

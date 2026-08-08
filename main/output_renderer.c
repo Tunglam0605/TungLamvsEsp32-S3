@@ -1,6 +1,7 @@
 /**
  * @file output_renderer.c
- * @brief Maps immutable application snapshots to LED, tower and DO1 buzzer.
+ * @brief Ánh xạ snapshot ứng dụng bất biến (immutable) sang LED, tower
+ *        và buzzer DO1.
  */
 #include "output_renderer.h"
 

@@ -43,14 +43,14 @@
 extern "C" {
 #endif
 
-/* Mapping of roles to board channels */
+/* Ánh xạ vai trò ứng dụng sang kênh vật lý của board */
 typedef struct {
-    /* Inputs (buttons, active-low) */
-    bsp_di_channel_t btn_task1;    /* Exchange cart      */
-    bsp_di_channel_t btn_task2;    /* Supply empty cart  */
-    bsp_di_channel_t btn_cancel;   /* Cancel             */
+    /* Đầu vào (nút bấm, active-low) */
+    bsp_di_channel_t btn_task1;    /* Nút Exchange Cart      */
+    bsp_di_channel_t btn_task2;    /* Nút Supply Empty Cart  */
+    bsp_di_channel_t btn_cancel;   /* Nút Cancel             */
 
-    /* Outputs (LEDs / tower / buzzer, active-low) */
+    /* Đầu ra (LED / tower / buzzer, active-low) */
     bsp_do_channel_t led_task1;
     bsp_do_channel_t led_task2;
     bsp_do_channel_t led_cancel;
@@ -64,7 +64,7 @@ typedef struct {
 } callbox_io_mapping_t;
 
 /**
- * @brief Get the default mapping for the Callbox SEWS build.
+ * @brief Lấy bảng ánh xạ mặc định của bản build Callbox SEWS.
  */
 const callbox_io_mapping_t *callbox_io_get_mapping(void);
 

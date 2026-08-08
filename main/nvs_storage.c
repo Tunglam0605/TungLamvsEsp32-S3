@@ -296,8 +296,8 @@ esp_err_t nvs_load_config(Config_t *config)
         first_error = item_err;
     }
 
-    /* Missing key means this is an older installation; preserve its original
-     * plaintext broker behavior by keeping the TCP default from Config_t. */
+    /* Key thiếu nghĩa là bản cài đặt cũ; giữ hành vi broker plaintext ban đầu
+     * bằng cách giữ mặc định TCP từ Config_t. */
     uint8_t mqtt_tls = config->mqtt_transport == MQTT_TRANSPORT_TLS ? 1U : 0U;
     item_err = nvs_get_u8(handle, NVS_MQTT_TRANSPORT_KEY, &mqtt_tls);
     if (item_err == ESP_OK) {

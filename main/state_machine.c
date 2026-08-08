@@ -1,4 +1,4 @@
-/** @file state_machine.c @brief Mission Manager: sole owner of business state. */
+/** @file state_machine.c @brief Mission Manager: chủ sở hữu duy nhất trạng thái nghiệp vụ. */
 #include "state_machine.h"
 #include "app_event_queue.h"
 #include "button_gate.h"
@@ -33,7 +33,8 @@ static uint32_t mission_now_ms(void)
     return (uint32_t)(esp_timer_get_time() / 1000ULL);
 }
 
-/* Unsigned subtraction deliberately handles esp_timer millisecond wrap. */
+/* Phép trừ không dấu cố tình xử lý việc tràn (wrap) millisecond của
+ * esp_timer. */
 static bool time_reached(uint32_t now_ms, uint32_t deadline_ms)
 {
     return (int32_t)(now_ms - deadline_ms) >= 0;
@@ -89,7 +90,8 @@ static void request_call(int task_id, uint32_t timestamp)
     if (sequence_next(&sequence) != ESP_OK) return;
     status_start_call(task_id, sequence, mission_now_ms(), timestamp);
     mqtt_publish_call(task_id, sequence, timestamp);
-    /* Pending is local only; Mission remains IDLE until WCS accepted. */
+    /* Trạng thái pending chỉ là cục bộ; Mission vẫn IDLE cho tới khi WCS
+     * chấp nhận. */
     status_request_feedback(OUTPUT_FEEDBACK_CALL_REQUESTED);
     ESP_LOGI(TAG, "CALL task %d pending seq=%lu", task_id, (unsigned long)sequence);
 }
@@ -105,8 +107,8 @@ static void request_cancel(uint32_t timestamp)
         }
     }
     if (!target) {
-        /* No cancelable task (IDLE or LOCKED): match the operator feedback
-         * convention with one long invalid-operation tone. */
+        /* Không còn task nào để hủy (IDLE hoặc LOCKED): phát một tiếng bíp dài
+         * báo thao tác không hợp lệ như quy ước. */
         status_request_feedback(OUTPUT_FEEDBACK_TRANSACTION_FAILED);
         return;
     }
@@ -132,7 +134,8 @@ static bool command_matches_call(int task_id, uint32_t ref_seq)
 void handle_mqtt_command(const char *cmd, int task, const char *agv_id, uint32_t timestamp)
 {
     if (!cmd || task < 1 || task > 2) return;
-    /* Compatibility API; Phase 4 ingress uses app_event_t below with ref_seq. */
+    /* API tương thích; điểm vào Phase 4 dùng app_event_t bên dưới với
+     * ref_seq. */
     (void)agv_id;
     ESP_LOGW(TAG, "Legacy MQTT command ignored without ref_seq: %s", cmd);
     (void)timestamp;
@@ -174,9 +177,9 @@ static void handle_wcs_command(const protocol_command_t *cmd)
         status_request_feedback(OUTPUT_FEEDBACK_CANCEL_ACKNOWLEDGED);
         return;
     }
-    /* `rejected` can acknowledge either transaction type.  A call and a
-     * later cancel deliberately have different sequence numbers, so checking
-     * CallSequence alone would silently drop a cancel rejection such as
+    /* `rejected` có thể xác nhận một trong hai loại giao dịch. Một call và
+     * một cancel sau đó cố tình dùng số thứ tự khác nhau, nên chỉ kiểm tra
+     * CallSequence thôi sẽ âm thầm bỏ qua một cancel bị từ chối như
      * {type:"rejected", task:1, ref_seq:105, reason:"locked"}. */
     if (cmd->type == PROTOCOL_CMD_REJECTED) {
         const bool rejects_call = status.Call[task - 1].pending &&
@@ -191,18 +194,18 @@ static void handle_wcs_command(const protocol_command_t *cmd)
         }
 
         if (rejects_cancel) {
-            /* WCS remains authoritative: do not change the mission to IDLE.
-             * Clear only this local cancel transaction, notify the operator,
-             * then reconcile (the WCS may report LOCKED after reason=locked). */
+            /* WCS vẫn có thẩm quyền: không đổi mission sang IDLE. Chỉ xóa giao
+             * dịch cancel cục bộ này, báo cho người vận hành, rồi đồng bộ lại
+             * (WCS có thể báo LOCKED sau reason=locked). */
             status_clear_cancel();
             status_request_feedback(OUTPUT_FEEDBACK_TRANSACTION_FAILED);
             ESP_LOGW(TAG, "CANCEL rejected task=%d ref=%lu reason=%s",
                      task, (unsigned long)cmd->ref_seq,
                      protocol_reject_reason_name(cmd->reason));
-            /* `locked`, `duplicate`, and `no_task` imply that Callbox and
-             * WCS may disagree about the mission snapshot, so reconcile.
-             * `wcs_busy` changes no mission state: operator may retry later
-             * without starting another transaction immediately. */
+            /* `locked`, `duplicate`, và `no_task` ngụ ý Callbox và WCS có
+             * thể không khớp về snapshot mission, nên đồng bộ lại.
+             * `wcs_busy` không đổi trạng thái mission: người vận hành có thể
+             * thử lại sau mà không cần bắt đầu giao dịch khác ngay. */
             if (cmd->reason != REJECT_REASON_WCS_BUSY) begin_wcs_sync();
             return;
         }
@@ -215,8 +218,8 @@ static void handle_wcs_command(const protocol_command_t *cmd)
         ESP_LOGW(TAG, "CALL rejected task=%d ref=%lu reason=%s", task,
                  (unsigned long)cmd->ref_seq,
                  protocol_reject_reason_name(cmd->reason));
-        /* A duplicate CALL can mean WCS had already committed a prior
-         * delivery. Reconcile instead of trusting the local error display. */
+        /* CALL trùng lặp có thể nghĩa là WCS đã cam kết một lần giao hàng
+         * trước đó. Đồng bộ lại thay vì tin vào hiển thị lỗi cục bộ. */
         if (cmd->reason == REJECT_REASON_DUPLICATE) begin_wcs_sync();
         return;
     }
@@ -321,7 +324,8 @@ static void tick_transactions(void)
         } else if (call->retry_count < MISSION_MAX_RETRIES &&
                    time_reached(now_ms, call->retry_at_ms) &&
                    network_is_connected() && mqtt_is_connected()) {
-            /* Retransmission is the same transaction: never consume a new seq. */
+            /* Truyền lại cũng là một giao dịch: không bao giờ tiêu thụ seq
+             * mới. */
             mqtt_publish_call(task, call->seq, call->timestamp);
             status_note_call_retry(task, now_ms + MISSION_RETRY_INTERVAL_MS);
             ESP_LOGW(TAG, "CALL retry task %d seq=%lu attempt=%u",
@@ -367,8 +371,8 @@ static void handle_button_event(const ButtonMsg_t *button)
         return;
     }
 
-    /* A short Cancel press is committed only after release.  This prevents a
-     * deliberate 5-second rescue hold from also publishing a cancel command. */
+    /* Nhấn Cancel ngắn chỉ được cam kết sau khi nhả nút. Điều này ngăn việc
+     * giữ nút 5 giây để kích hoạt Rescue AP vô tình cũng gửi lệnh cancel. */
     if (button->state == BTN_PRESSED && accepted_press) {
         s_cancel_hold_active = true;
         s_cancel_hold_consumed = false;

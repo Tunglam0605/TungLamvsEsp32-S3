@@ -7,19 +7,19 @@
  *
  *          ═══ LUỒNG KHỞI ĐỘNG ═══
  *          ┌─────────────┐   ┌──────────────┐   ┌────────────────────┐
- *          │ NVS init    │ → │ Load config  │ → │ Tạo queue LED/   │
- *          │ (nvs_strg)  │   │ (factory     │   │ buzzer (20/10)\  │
+ *          │ NVS init    │ → │ Load config  │ → │ Tạo queue LED/     │
+ *          │ (nvs_strg)  │   │ (factory     │   │ buzzer (20/10)\    │
  *          └─────────────┘   │  fallback)   │   └────────────────────┘
  *                            └──────────────┘
  *          ┌─────────────┐   ┌──────────────┐   ┌────────────────────┐
- *          │ BSP board   │ → │ LED/I/O/state│ → │ WiFi APSTA +      │
- *          │ init        │   │ init        │   │ netprt auto-save   │
+ *          │ BSP board   │ → │ LED/I/O/state│ → │ WiFi APSTA +       │
+ *          │ init        │   │ init         │   │ netprt auto-save   │
  *          └─────────────┘   └──────────────┘   └────────────────────┘
- *          ┌─────────────┐   ┌──────────────┐   ┌────────────────────┐
+ *          ┌─────────────┐   ┌─────────────┐   ┌────────────────────┐
  *          │ MQTT init   │ → │ 4 task      │ → │ vòng nền auto-save │
- *          │ + 5s đợi   │   │ (io/state/  │   │ seq_num mỗi 6 s    │
+ *          │ + 5s đợi    │   │ (io/state/  │   │ seq_num mỗi 6 s    │
  *          └─────────────┘   │ mqtt×2)     │   └────────────────────┘
- *                            └──────────────┘
+ *                            └─────────────┘
  *
  *          Vòng lặp chính (while(1)) không làm gì khác ngoài việc mỗi 6 s
  *          lưu seq_num hiện tại xuống NVS — các task khác đã được tạo và
@@ -68,7 +68,8 @@ QueueHandle_t buzzer_queue = NULL;
 /* Cấu hình tổng (toàn cục) — factory defaults dùng chung mọi thiết bị;
  * ID và mọi cài đặt có thể sửa qua portal. */
 Config_t g_config = {
-    /* Factory defaults shared by all units; ID and settings can be changed in the portal. */
+    /* Mặc định nhà máy dùng chung mọi thiết bị; ID và cài đặt có thể
+     * thay đổi qua portal. */
     .wifi_ssid = "AGV1",
     .wifi_pass = "123456789",
     .wifi_profiles = {
@@ -101,7 +102,7 @@ static void load_config_from_nvs(void)
                  esp_err_to_name(err));
     }
 
-    /* Recover factory defaults if an older build stored empty shared settings. */
+    /* Khôi phục mặc định nhà máy nếu bản cũ lưu các cài đặt dùng chung trống. */
     if (g_config.wifi_profile_count == 0 || g_config.wifi_ssid[0] == '\0') {
         config_add_wifi_profile(&g_config, "Robotics AUBOT 1", "123456789");
         config_add_wifi_profile(&g_config, "AGV1", "123456789");
@@ -116,13 +117,13 @@ static void load_config_from_nvs(void)
     if (g_config.sntp_fallback[0] == '\0') {
         strncpy(g_config.sntp_fallback, "time.google.com", sizeof(g_config.sntp_fallback) - 1);
     }
-    /* The STA portal password is fixed for this deployed firmware.  Do not
-     * inherit a stale value left by an earlier firmware in NVS. */
+    /* Mật khẩu portal STA được cố định cho firmware đang triển khai. Không
+     * kế thừa giá trị cũ do firmware trước để lại trong NVS. */
     strncpy(g_config.web_password, "aubot", sizeof(g_config.web_password) - 1);
     g_config.web_password[sizeof(g_config.web_password) - 1] = '\0';
     if (g_config.mqtt_port == 0) g_config.mqtt_port = 1884;
-    /* Older builds used IDs such as cb01.  Keep only their numeric part so
-     * all units use the replacement-friendly AUBOT-Callbox-<number> scheme. */
+    /* Các bản cũ dùng ID như cb01. Chỉ giữ phần số để mọi thiết bị dùng
+     * quy ước dễ thay thế AUBOT-Callbox-<số>. */
     char numeric_id[sizeof(g_config.callbox_id)] = { 0 };
     size_t numeric_len = 0;
     for (size_t i = 0; g_config.callbox_id[i] && numeric_len + 1 < sizeof(numeric_id); ++i) {
@@ -159,8 +160,8 @@ void app_main(void)
     /* Bước 2: nạp cấu hình đã lưu (hoặc factory default) vào g_config */
     load_config_from_nvs();
 
-    /* Sequence allocation is independent of Config_t. NVS is only the
-     * persistence primitive owned by sequence_service. */
+    /* Việc cấp phát số thứ tự độc lập với Config_t. NVS chỉ là phương tiện
+     * lưu trữ do sequence_service sở hữu. */
     ret = sequence_service_init();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Sequence service init failed: %s", esp_err_to_name(ret));
@@ -186,7 +187,6 @@ void app_main(void)
     ESP_LOGI(TAG, "Queues created successfully");
 
     /* Bước 4: khởi tạo board qua BSP (expander I2C + đầu vào số) */
-    /* Initialize board hardware via BSP (I/O expander + digital inputs) */
     esp_err_t board_ret = bsp_board_init();
     if (board_ret != ESP_OK) {
         ESP_LOGE(TAG, "BSP board init failed: %s", esp_err_to_name(board_ret));
@@ -208,9 +208,9 @@ void app_main(void)
     if (wifi_ret != ESP_OK) {
         ESP_LOGE(TAG, "WiFi STA/AP init failed: %s", esp_err_to_name(wifi_ret));
     }
-    /* Run SNTP for all network modes. It retries automatically until a
-     * network path is available, so MQTT/TCP events also receive real UTC
-     * timestamps rather than seconds since boot. */
+    /* Chạy SNTP cho mọi chế độ mạng. Nó tự động thử lại tới khi có đường
+     * mạng, để các sự kiện MQTT/TCP cũng nhận timestamp UTC thật thay vì
+     * giây kể từ khi khởi động. */
     time_sync_init();
     esp_err_t status_ret = network_status_task_start();
     if (status_ret != ESP_OK) {

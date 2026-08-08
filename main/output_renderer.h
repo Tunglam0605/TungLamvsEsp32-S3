@@ -1,6 +1,7 @@
 /**
  * @file output_renderer.h
- * @brief Snapshot-only renderer for Callbox visual/audio outputs.
+ * @brief Bộ kết xuất chỉ đọc snapshot (immutable) cho các đầu ra
+ *        hiển thị/âm thanh của Callbox.
  */
 #ifndef CALLBOX_OUTPUT_RENDERER_H
 #define CALLBOX_OUTPUT_RENDERER_H

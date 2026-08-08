@@ -40,7 +40,7 @@
 extern "C" {
 #endif
 
-/* Call after esp_netif_init() and esp_event_loop_create_default(). */
+/* Gọi sau esp_netif_init() và esp_event_loop_create_default(). */
 esp_err_t bsp_eth_init(void);
 bool bsp_eth_is_connected(void);
 

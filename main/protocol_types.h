@@ -1,6 +1,7 @@
 /**
  * @file protocol_types.h
- * @brief MQTT application-protocol types, independent of transport and Mission.
+ * @brief Các kiểu giao thức ứng dụng MQTT, độc lập với tầng truyền tải
+ *        và Mission.
  */
 #ifndef CALLBOX_PROTOCOL_TYPES_H
 #define CALLBOX_PROTOCOL_TYPES_H
@@ -22,8 +23,9 @@ typedef enum {
     PROTOCOL_CMD_CONFIG,
 } protocol_command_type_t;
 
-/* Rejection semantics are part of the WCS contract, not free-form UI text.
- * Unknown strings parse as NONE and are still logged safely as unspecified. */
+/* Ngữ nghĩa từ chối (rejection) là một phần của hợp đồng WCS, không phải
+ * văn bản UI tự do. Chuỗi không xác định được phân tích thành NONE và vẫn
+ * được ghi log an toàn như giá trị không chỉ định. */
 typedef enum {
     REJECT_REASON_NONE = 0,
     REJECT_REASON_LOCKED,
@@ -38,9 +40,9 @@ typedef struct {
     uint32_t ref_seq;
     uint32_t timestamp;
     char agv_id[32];
-    /* Optional structured WCS rejection diagnostic. */
+    /* Chẩn đoán từ chối có cấu trúc (tùy chọn) từ WCS. */
     reject_reason_t reason;
-    /* Valid only for type=sync. WCS supplies both authoritative snapshots. */
+    /* Chỉ hợp lệ với type=sync. WCS cung cấp cả hai snapshot có thẩm quyền. */
     TaskState_t sync_state[2];
     uint32_t sync_call_seq[2];
     char sync_agv_id[2][32];

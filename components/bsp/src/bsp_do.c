@@ -46,9 +46,9 @@ static const char *TAG = "BSP_DO";
 #define BSP_I2C_SCL_GPIO    GPIO_NUM_41
 #define BSP_I2C_SDA_GPIO    GPIO_NUM_42
 #define BSP_I2C_FREQ_HZ     400000
-/* TCA9554 7-bit address on this board (A0/A1 tied low). */
+/* Địa chỉ 7-bit của TCA9554 trên board này (A0/A1 nối GND). */
 #define BSP_TCA9554_ADDR    0x20
-/* I2C transaction timeout for expander traffic (ms). */
+/* Thời gian chờ tối đa cho giao dịch I2C với expander (ms). */
 #define BSP_DO_EXPANDER_TIMEOUT_MS 100U
 #define BSP_DO_MUTEX_TIMEOUT_MS 50U
 

@@ -1,6 +1,6 @@
 /**
  * @file mission_types.h
- * @brief Mission-domain types shared by the Mission Manager and its snapshots.
+ * @brief Các kiểu miền mission dùng chung giữa Mission Manager và snapshot.
  */
 #ifndef CALLBOX_MISSION_TYPES_H
 #define CALLBOX_MISSION_TYPES_H
@@ -16,8 +16,8 @@ typedef enum {
     TASK_COMPLETED,
 } TaskState_t;
 
-/* The Mission Manager is the sole writer. Repeated publishes keep seq so WCS
- * can deduplicate a single logical call or cancel transaction. */
+/* Mission Manager là người ghi duy nhất. Các lần publish lặp lại giữ nguyên
+ * seq để WCS khử trùng lặp một giao dịch call hoặc cancel logic. */
 typedef struct {
     bool pending;
     uint32_t seq;
@@ -27,24 +27,25 @@ typedef struct {
     uint32_t timestamp;
 } mission_transaction_t;
 
-/* The Callbox must finish a WCS state reconciliation before accepting local
- * call/cancel actions after an MQTT connection (or reconnection). */
+/* Callbox phải hoàn tất việc đồng bộ trạng thái với WCS trước khi chấp
+ * nhận các hành động call/cancel cục bộ sau khi kết nối (hoặc kết nối lại)
+ * MQTT. */
 typedef enum {
     COMM_OFFLINE = 0,
     COMM_SYNCING,
     COMM_READY,
 } comm_state_t;
 
-/* A WCS warning is application state.  Output Renderer reads it from a
- * snapshot and never changes the warning itself. */
+/* Cảnh báo WCS là trạng thái ứng dụng. Output Renderer đọc nó từ snapshot
+ * và không bao giờ tự thay đổi cảnh báo. */
 typedef enum {
     TOWER_WARNING_NONE = 0,
     TOWER_WARNING_OVERDUE,
     TOWER_WARNING_ERROR,
 } tower_warning_t;
 
-/* A short-lived application feedback request. It is data in the snapshot;
- * only Output Renderer translates it to a physical buzzer pattern. */
+/* Yêu cầu phản hồi ứng dụng ngắn hạn. Nó là dữ liệu trong snapshot; chỉ
+ * Output Renderer chuyển nó thành mẫu bíp vật lý. */
 typedef enum {
     OUTPUT_FEEDBACK_NONE = 0,
     OUTPUT_FEEDBACK_CALL_REQUESTED,

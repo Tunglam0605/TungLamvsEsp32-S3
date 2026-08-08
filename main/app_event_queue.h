@@ -1,4 +1,4 @@
-/** @file app_event_queue.h @brief Queue plumbing for application events. */
+/** @file app_event_queue.h @brief Hàng đợi (queue) trung gian cho các sự kiện ứng dụng. */
 #ifndef CALLBOX_APP_EVENT_QUEUE_H
 #define CALLBOX_APP_EVENT_QUEUE_H
 

@@ -1,6 +1,6 @@
 /**
  * @file time_sync.h
- * @brief Shared SNTP clock service for every Callbox network mode.
+ * @brief Dịch vụ đồng hồ SNTP dùng chung cho mọi chế độ mạng của Callbox.
  */
 #ifndef CALLBOX_TIME_SYNC_H
 #define CALLBOX_TIME_SYNC_H
@@ -8,13 +8,13 @@
 #include <stdbool.h>
 #include "queues.h"
 
-/** Start background SNTP polling. Safe to call more than once. */
+/** Bắt đầu SNTP nền (background). An toàn khi gọi nhiều lần. */
 void time_sync_init(void);
 
-/** True only after the RTC contains a plausible Unix timestamp. */
+/** Chỉ true khi RTC đã chứa timestamp Unix hợp lý. */
 bool time_sync_is_valid(void);
 
-/** Replace SNTP servers after validated portal configuration is saved. */
+/** Thay thế máy chủ SNTP sau khi cấu hình portal hợp lệ được lưu. */
 void time_sync_reconfigure(const Config_t *config);
 
 #endif /* CALLBOX_TIME_SYNC_H */

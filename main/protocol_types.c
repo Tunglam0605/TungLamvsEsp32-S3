@@ -1,6 +1,6 @@
 /**
  * @file protocol_types.c
- * @brief Strict JSON codec for the Callbox MQTT command contract.
+ * @brief Codec JSON nghiêm ngặt cho hợp đồng lệnh MQTT của Callbox.
  */
 #include "protocol_types.h"
 

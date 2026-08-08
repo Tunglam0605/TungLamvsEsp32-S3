@@ -1,24 +1,24 @@
 /**
  * @file    tca9554.h
- * @brief   Generic device driver for the TCA9554/PCA9554 8-bit I2C I/O
- *          expander (GPIO over I2C).
+ * @brief   Driver thiết bị tổng quát cho IC mở rộng I/O 8-bit TCA9554/PCA9554
+ *          (GPIO qua I2C).
  *
- *          This driver knows only the TCA9554 family and the I2C bus:
+ *          Driver chỉ biết về họ TCA9554 và bus I2C:
  *          - I2C device handle
- *          - 7-bit slave address (configurable, NOT board-fixed)
- *          - register map: INPUT / OUTPUT / POLARITY / CONFIG
- *          - pins 0..7
- *          - I2C transaction timeout
- *          - raw electrical output byte
+ *          - địa chỉ slave 7-bit (cấu hình được, KHÔNG cố định theo board)
+ *          - bản đồ thanh ghi: INPUT / OUTPUT / POLARITY / CONFIG
+ *          - chân 0..7
+ *          - thời gian chờ giao dịch I2C
+ *          - byte đầu ra điện mức thô
  *
- *          It knows NOTHING about the board, product, or application:
- *          no Waveshare, no CallBox, no BSP channel enums, no task/tower
- *          semantics, no MQTT/WCS.
+ *          Driver KHÔNG biết gì về board, sản phẩm hay ứng dụng:
+ *          không Waveshare, không CallBox, không enum kênh BSP, không ngữ
+ *          nghĩa task/tower, không MQTT/WCS.
  *
- * @note    Thread safety: the driver is NOT thread-safe. It keeps instance
- *          state (bus/device handle, address, timeout, shadow helpers) but
- *          does not create a mutex. The caller owns serialization of all
- *          I2C transactions (e.g. BSP_DO serializes read-modify-write).
+ * @note    An toàn luồng: driver KHÔNG an toàn luồng. Nó giữ trạng thái
+ *          instance (handle bus/device, địa chỉ, timeout, bộ đếm shadow)
+ *          nhưng không tạo mutex. Người gọi chịu trách nhiệm tuần tự hóa
+ *          mọi giao dịch I2C (ví dụ BSP_DO tuần tự hóa read-modify-write).
  *
  * @author  TungLamAutomation <tunglam652004@gmail.com>
  * @version 1.0.0
@@ -39,23 +39,24 @@ extern "C" {
 #define TCA9554_PIN_COUNT 8
 
 /**
- * @brief Runtime configuration for one TCA9554 device instance.
+ * @brief Cấu hình runtime cho một instance TCA9554.
  *
- * The slave address (e.g. 0x20 on the current board) is BOARD information
- * and must be provided here — the driver never assumes a fixed address.
+ * Địa chỉ slave (ví dụ 0x20 trên board hiện tại) là thông tin của BOARD
+ * và phải được truyền vào đây — driver không bao giờ tự giả định một
+ * địa chỉ cố định.
  */
 typedef struct {
-    i2c_master_bus_handle_t bus;        /* Existing I2C master bus */
-    uint8_t address;                    /* 7-bit slave address, e.g. 0x20 */
-    uint32_t clock_hz;                  /* Per-device SCL frequency, e.g. 400 kHz */
-    uint32_t timeout_ms;                /* I2C transaction timeout in ms */
+    i2c_master_bus_handle_t bus;        /* Bus I2C master đã tồn tại */
+    uint8_t address;                    /* Địa chỉ slave 7-bit, vd. 0x20 */
+    uint32_t clock_hz;                  /* Tần số SCL riêng, vd. 400 kHz */
+    uint32_t timeout_ms;                /* Thời gian chờ giao dịch I2C (ms) */
 } tca9554_config_t;
 
 /**
- * @brief TCA9554 device instance (caller-owned storage).
+ * @brief Instance thiết bị TCA9554 (vùng nhớ do người gọi cấp phát).
  *
- * Contains the device handle and configuration snapshot.  The driver is
- * non-thread-safe; callers must serialize all accesses.
+ * Chứa handle thiết bị và snapshot cấu hình. Driver không an toàn luồng;
+ * người gọi phải tuần tự hóa mọi truy cập.
  */
 typedef struct {
     i2c_master_bus_handle_t bus;
@@ -64,55 +65,54 @@ typedef struct {
 } tca9554_t;
 
 /**
- * @brief Initialize one TCA9554 device on an existing I2C master bus.
+ * @brief Khởi tạo một thiết bị TCA9554 trên bus I2C master đã có sẵn.
  *
- * Adds the device at `config->address`, configures all pins as outputs
- * and writes the initial safe electrical output byte.
+ * Thêm thiết bị tại `config->address`, cấu hình tất cả chân là đầu ra,
+ * và ghi byte đầu ra an toàn ban đầu.
  *
- * @param dev      Handle to populate (caller-owned storage).
- * @param config   Bus, address, clock and timeout; must be valid.
- * @param initial_outputs  Raw electrical output byte written after
- *                         configuring directions (e.g. 0xFF for inactive
- *                         active-low outputs).
- * @return ESP_OK on success; esp_err_t otherwise (no resource leak on
- *         partial failure is guaranteed by this driver).
+ * @param dev      Handle cần được điền (vùng nhớ do người gọi cấp).
+ * @param config   Bus, địa chỉ, clock và timeout; phải hợp lệ.
+ * @param initial_outputs  Byte mức điện thô được ghi sau khi cấu hình
+ *                         hướng (vd. 0xFF để đầu ra active-low đều tắt).
+ * @return ESP_OK nếu thành công; esp_err_t nếu khác (lỗi giữa chừng không
+ *         để rò rỉ tài nguyên — do driver đảm bảo).
  */
 esp_err_t tca9554_init(tca9554_t *dev, const tca9554_config_t *config,
                        uint8_t initial_outputs);
 
 /**
- * @brief Configure every pin as output (CONFIG = 0x00).
+ * @brief Cấu hình tất cả các chân làm đầu ra (CONFIG = 0x00).
  */
 esp_err_t tca9554_set_all_outputs(tca9554_t *dev);
 
 /**
- * @brief Set the direction of a single pin.
+ * @brief Đặt hướng một chân đơn lẻ.
  * @param pin    0..7
- * @param input  true = input (CONFIG bit 1), false = output (bit 0)
+ * @param input  true = đầu vào (bit CONFIG = 1), false = đầu ra (bit = 0)
  */
 esp_err_t tca9554_set_pin_mode(tca9554_t *dev, uint8_t pin, bool input);
 
 /**
- * @brief Read the raw OUTPUT register (8 bits).
- * @param out  Receives the raw electrical output byte.
+ * @brief Đọc thanh ghi OUTPUT thô (8 bit).
+ * @param out  Nhận byte đầu ra điện mức thô.
  */
 esp_err_t tca9554_read_outputs(tca9554_t *dev, uint8_t *out);
 
 /**
- * @brief Write the raw OUTPUT register (all 8 bits at once).
- * @param outputs  Raw electrical output byte.
+ * @brief Ghi thanh ghi OUTPUT thô (cả 8 bit một lúc).
+ * @param outputs  Byte đầu ra điện mức thô.
  */
 esp_err_t tca9554_write_outputs(tca9554_t *dev, uint8_t outputs);
 
 /**
- * @brief Write a single output bit (read-modify-write of OUTPUT).
+ * @brief Ghi một bit đầu ra đơn lẻ (read-modify-write của OUTPUT).
  * @param pin    0..7
- * @param level  raw electrical level (0 or 1)
+ * @param level  mức điện thô (0 hoặc 1)
  */
 esp_err_t tca9554_write_pin(tca9554_t *dev, uint8_t pin, bool level);
 
 /**
- * @brief Toggle a single output bit (read-modify-write of OUTPUT).
+ * @brief Đảo một bit đầu ra đơn lẻ (read-modify-write của OUTPUT).
  * @param pin    0..7
  */
 esp_err_t tca9554_toggle_pin(tca9554_t *dev, uint8_t pin);

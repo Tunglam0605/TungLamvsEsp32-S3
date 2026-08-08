@@ -1,6 +1,6 @@
 /**
  * @file time_sync.c
- * @brief Keeps the ESP32 RTC synchronized for TCP and TLS MQTT operation.
+ * @brief Giữ RTC của ESP32 đồng bộ cho hoạt động MQTT qua TCP và TLS.
  */
 #include "time_sync.h"
 
@@ -19,8 +19,8 @@ static void time_sync_start(const Config_t *config)
 {
     const char *primary = config && config->sntp_primary[0] ? config->sntp_primary : "pool.ntp.org";
     const char *fallback = config && config->sntp_fallback[0] ? config->sntp_fallback : "time.google.com";
-    /* esp_sntp retains the server pointers. Never point it at a temporary
-     * Config_t copy from the HTTP save handler. */
+    /* esp_sntp giữ các con trỏ tới máy chủ. Không bao giờ trỏ nó vào bản
+     * sao Config_t tạm thời từ HTTP save handler. */
     strncpy(s_primary, primary, sizeof(s_primary) - 1U);
     s_primary[sizeof(s_primary) - 1U] = '\0';
     strncpy(s_fallback, fallback, sizeof(s_fallback) - 1U);
@@ -36,12 +36,12 @@ void time_sync_init(void)
 {
     if (s_started) return;
 
-    /* Local presentation is ICT; MQTT still transmits Unix UTC epoch time. */
+    /* Hiển thị cục bộ theo giờ ICT; MQTT vẫn truyền thời gian Unix UTC epoch. */
     setenv("TZ", "ICT-7", 1);
     tzset();
 
-    /* SNTP remains active and retries automatically when STA or Ethernet
-     * becomes available. Both MQTT modes therefore use real timestamps. */
+    /* SNTP vẫn hoạt động và tự động thử lại khi STA hoặc Ethernet khả dụng.
+     * Do đó cả hai chế độ MQTT đều dùng timestamp thực. */
     time_sync_start(&g_config);
     s_started = true;
 }

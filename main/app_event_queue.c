@@ -1,4 +1,4 @@
-/** @file app_event_queue.c @brief Bounded queue implementation for app events. */
+/** @file app_event_queue.c @brief Triển khai hàng đợi giới hạn cho các sự kiện ứng dụng. */
 #include "app_event_queue.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"

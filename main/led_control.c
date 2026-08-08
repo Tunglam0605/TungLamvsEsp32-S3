@@ -1,6 +1,6 @@
 /**
  * @file led_control.c
- * @brief Hardware output primitives used exclusively by Output Renderer.
+ * @brief Các lệnh gốc phần cứng đầu ra, chỉ được sử dụng bởi Output Renderer.
  */
 #include "led_control.h"
 

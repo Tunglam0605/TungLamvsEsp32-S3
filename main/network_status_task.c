@@ -50,8 +50,8 @@ static volatile int8_t s_rescue_ap_beep_request;
 
 static void play_sta_connected_pattern(void)
 {
-    /* Pattern policy belongs to this application task; BSP only exposes
-     * immediate PWM set/off hardware operations. */
+    /* Chính sách mẫu (pattern) thuộc về task ứng dụng này; BSP chỉ phơi bày
+     * các thao tác phần cứng đặt/tắt PWM tức thời. */
     for (int i = 0; i < 2; ++i) {
         if (bsp_buzzer_set(2000, 50) != ESP_OK) break;
         vTaskDelay(pdMS_TO_TICKS(100));

@@ -1,6 +1,7 @@
 /**
  * @file app_event.h
- * @brief Transport-neutral events delivered to the application owner task.
+ * @brief Sự kiện trung lập với tầng truyền tải (transport), được giao tới
+ *        task chủ sở hữu ứng dụng.
  */
 #ifndef CALLBOX_APP_EVENT_H
 #define CALLBOX_APP_EVENT_H

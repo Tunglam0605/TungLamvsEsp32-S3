@@ -42,9 +42,9 @@ extern "C" {
 #endif
 
 /**
- * @brief Initialize board I/O (I2C expander, digital I/O, on-board buzzer).
- *        Ethernet is initialized separately after the app creates esp-netif.
- * @return ESP_OK on success.
+ * @brief Khởi tạo I/O của board (I2C expander, đầu vào/ra số, buzzer).
+ *        Ethernet được khởi tạo riêng sau khi app tạo esp-netif.
+ * @return ESP_OK nếu thành công.
  */
 esp_err_t bsp_board_init(void);
 

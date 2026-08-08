@@ -102,10 +102,10 @@ void io_handler_task(void *pvParameters)
     const callbox_io_mapping_t *m = callbox_io_get_mapping();
 
     /*
-     * Debounce each logical input independently. A raw level must remain
-     * unchanged for IO_DEBOUNCE_MS before it becomes the published state.
-     * The first sample establishes the initial state and never creates a
-     * synthetic press event after boot.
+     * Debounce từng đầu vào logic một cách độc lập. Mức thô phải không đổi
+     * trong IO_DEBOUNCE_MS trước khi trở thành trạng thái được công bố.
+     * Mẫu đầu tiên xác lập trạng thái ban đầu và không bao giờ tạo sự kiện
+     * nhấn giả sau khi boot.
      */
     uint8_t raw_state[3] = {0};
     uint8_t candidate_state[3] = {0};
@@ -152,17 +152,15 @@ void io_handler_task(void *pvParameters)
                              stable_state[i] ? "PRESSED" : "RELEASED",
                              (unsigned long)task_cycle);
 
-                    /* Publish both edges to the button gate.  The gate
-                     * latches PRESSED until this RELEASED arrives, so a
-                     * second layer—not the task state machine—owns edge
-                     * qualification. */
+                    /* Công bố cả hai cạnh cho button gate. Gate giữ latch PRESSED
+                     * tới khi RELEASED đến, nên lớp thứ hai — không phải máy
+                     * trạng thái task — sở hữu việc chuẩn hóa cạnh. */
                     if (stable_state[i] != 0U) {
-                        /* A real press is a stable LOW edge (BSP already
-                         * converts active-low to logical 1).  Mechanical
-                         * contacts can still produce a complete HIGH/LOW
-                         * cycle longer than the debounce window; guard the
-                         * accepted edge so that rapid chatter cannot flood
-                         * the application queue. */
+                        /* Nhấn thực là cạnh LOW ổn định (BSP đã chuyển
+                         * active-low thành logic 1). Tiếp điểm cơ có thể tạo
+                         * chu kỳ HIGH/LOW dài hơn cửa sổ debounce; canh (guard)
+                         * cạnh được chấp nhận để nhấn chập chờn nhanh không
+                         * thể làm tràn hàng đợi ứng dụng. */
                         const TickType_t press_guard = pdMS_TO_TICKS(IO_PRESS_GUARD_MS);
                         if (last_press_tick[i] != 0 &&
                             (now_ticks - last_press_tick[i]) < press_guard) {

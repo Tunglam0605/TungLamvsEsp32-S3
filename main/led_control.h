@@ -1,6 +1,7 @@
 /**
  * @file led_control.h
- * @brief Stateless-facing hardware primitives for Output Renderer.
+ * @brief Các lệnh gốc phần cứng không lưu trạng thái, dành riêng cho
+ *        Output Renderer.
  */
 #ifndef CALLBOX_LED_CONTROL_H
 #define CALLBOX_LED_CONTROL_H

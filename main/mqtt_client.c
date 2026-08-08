@@ -1,10 +1,11 @@
 /**
  * @file    mqtt_client.c
- * @brief   MQTT transport adapter for Callbox.
+ * @brief   Bộ điều hợp vận chuyển MQTT cho Callbox.
  *
- * The application protocol remains callbox/<id>/{cmd,event,status}.  This
- * module delegates MQTT framing, keep-alive, reconnect and TLS to ESP-MQTT so
- * the same firmware works with an internal TCP broker or a public TLS broker.
+ * Giao thức ứng dụng vẫn là callbox/<id>/{cmd,event,status}. Module này
+ * ủy thác khung MQTT (framing), keep-alive, reconnect và TLS cho ESP-MQTT
+ * để cùng một firmware chạy được với broker TCP nội bộ hoặc broker TLS công
+ * cộng.
  */
 #include "callbox_mqtt.h"
 
@@ -43,8 +44,9 @@ static void mqtt_publish_worker(void *pvParameters)
             continue;
         }
 
-        /* Only this low-priority worker may touch the ESP-MQTT TX API.  If
-         * the broker/outbox blocks, button/state tasks remain schedulable. */
+        /* Chỉ worker ưu tiên thấp này mới được chạm vào API TX của ESP-MQTT.
+         * Nếu broker/outbox bị chặn, các task nút bấm/trạng thái vẫn được
+         * lập lịch bình thường. */
         if (!s_client_mutex ||
             xSemaphoreTake(s_client_mutex, pdMS_TO_TICKS(20)) != pdTRUE) {
             ESP_LOGW(TAG, "MQTT TX skipped: client busy (%s)", message.topic);
@@ -64,9 +66,9 @@ static void mqtt_publish_worker(void *pvParameters)
     }
 }
 
-/* ESP-MQTT keeps these pointers for the life of the client.  Copy every
- * user-facing value before opening the connection so save/reconfigure cannot
- * leave the transport referencing a modified Config_t field. */
+/* ESP-MQTT giữ các con trỏ này suốt vòng đời client. Sao chép mọi giá trị
+ * hiển thị cho người dùng trước khi mở kết nối để save/reconfigure không thể
+ * để tầng vận chuyển tham chiếu tới trường Config_t đã bị sửa đổi. */
 static char s_uri[160];
 static char s_client_id[64];
 static char s_username[sizeof(g_config.mqtt_user)];
@@ -78,8 +80,8 @@ static const char *mqtt_transport_name(MqttTransport_t transport)
     return transport == MQTT_TRANSPORT_TLS ? "TLS" : "TCP";
 }
 
-/* Internal enums intentionally use upper-case names; MQTT follows the WCS
- * wire contract, which uses lower-case state strings. */
+/* Enum nội bộ cố tình đặt tên in hoa; MQTT tuân theo hợp đồng dây (wire)
+ * của WCS, dùng chuỗi trạng thái chữ thường. */
 static const char *mqtt_task_state_name(int task)
 {
     switch (get_task_state(task)) {
@@ -143,8 +145,8 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
         ESP_LOGI(TAG, "Command subscription accepted (id=%d)", event->msg_id);
         break;
     case MQTT_EVENT_DATA: {
-        /* Callbox commands are intentionally small.  Do not parse fragmented
-         * payloads as a complete command; oversized payloads are ignored. */
+        /* Lệnh Callbox cố ý nhỏ. Không phân tích payload bị phân mảnh như
+         * lệnh hoàn chỉnh; payload vượt kích thước bị bỏ qua. */
         if (event->current_data_offset != 0 || !event->topic || event->topic_len <= 0 ||
             event->topic_len >= 160 || event->data_len >= 512) {
             ESP_LOGW(TAG, "Ignoring fragmented or oversized MQTT command");
@@ -258,7 +260,7 @@ void mqtt_client_connect(void)
         .network.reconnect_timeout_ms = 5000,
     };
     if (g_config.mqtt_transport == MQTT_TRANSPORT_TLS) {
-        /* Public CA validation is required: never disable hostname/CN checks. */
+        /* Bắt buộc xác thực CA công cộng: không bao giờ tắt kiểm tra hostname/CN. */
         config.broker.verification.crt_bundle_attach = esp_crt_bundle_attach;
     }
 
@@ -300,7 +302,7 @@ static void mqtt_publish(const char *topic, const char *payload, int qos, int re
     message.qos = qos;
     message.retain = retain;
 
-    /* The caller never waits on the socket, MQTT mutex, or outbox. */
+    /* Người gọi không bao giờ chờ trên socket, mutex MQTT hay outbox. */
     if (xQueueSend(s_publish_queue, &message, 0) != pdTRUE) {
         ESP_LOGW(TAG, "MQTT TX queue full; dropping %s", topic);
         return;
@@ -331,7 +333,7 @@ void mqtt_publish_sync_request(uint32_t seq, uint32_t timestamp)
 {
     char topic[96], payload[256];
     snprintf(topic, sizeof(topic), MQTT_EVENT_TOPIC, g_config.callbox_id);
-    /* sync is device-scoped: intentionally contains no task field. */
+    /* sync được phạm vi theo thiết bị: cố ý không chứa trường task. */
     snprintf(payload, sizeof(payload),
              "{\"type\":\"sync_request\",\"seq\":%lu,\"ts\":%lu,\"fw\":\"%s\"}",
              (unsigned long)seq, (unsigned long)timestamp, CALLBOX_FIRMWARE_VERSION);
@@ -359,7 +361,7 @@ void mqtt_publish_status(void)
 void mqtt_event_handler_task(void *pvParameters)
 {
     (void)pvParameters;
-    /* Mission Manager consumes app_event_queue directly. */
+    /* Mission Manager tiêu thụ app_event_queue trực tiếp. */
     vTaskDelete(NULL);
 }
 

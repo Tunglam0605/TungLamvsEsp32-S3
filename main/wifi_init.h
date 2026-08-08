@@ -32,7 +32,7 @@
 #include "esp_wifi.h"
 #include "queues.h"
 
-/* Fixed address of the local recovery/configuration SoftAP. */
+/* Địa chỉ cố định của SoftAP khôi phục/cấu hình cục bộ. */
 #define CALLBOX_AP_IP_ADDR "192.168.65.204"
 #define CALLBOX_AP_NETMASK "255.255.255.0"
 
@@ -47,65 +47,65 @@ typedef struct {
 } wifi_sta_status_t;
 
 /**
- * @brief Initialize WiFi in Station mode
- * @param ssid: WiFi network SSID
- * @param password: WiFi password
+ * @brief Khởi tạo Wi-Fi ở chế độ Station
+ * @param ssid: SSID mạng Wi-Fi
+ * @param password: Mật khẩu Wi-Fi
  */
 void wifi_init_sta(const char *ssid, const char *password);
 
-/** Legacy helper: start one station profile and enable the AP immediately. */
+/** Hỗ trợ cũ: bắt đầu một profile station và bật AP ngay lập tức. */
 esp_err_t wifi_init_apsta(const char *ssid, const char *password,
                           const char *ap_ssid, const char *ap_password);
 
-/** Start station profiles and the local configuration AP immediately. */
+/** Bắt đầu các profile station và AP cấu hình cục bộ ngay. */
 esp_err_t wifi_init_sta_profiles(const Config_t *config,
                                  const char *ap_ssid, const char *ap_password);
 
-/** Apply a newly saved station profile without rebooting the device. */
+/** Áp dụng profile station vừa lưu mà không cần khởi động lại thiết bị. */
 esp_err_t wifi_apply_config(const Config_t *config);
 
-/** Register a callback invoked when the local configuration AP starts. */
+/** Đăng ký callback được gọi khi AP cấu hình cục bộ khởi động. */
 void wifi_set_config_ap_callback(wifi_config_ap_callback_t callback);
 
 /**
- * @brief WiFi event handler
+ * @brief Xử lý sự kiện Wi-Fi
  */
 void wifi_event_handler(void *arg, esp_event_base_t event_base,
                        int32_t event_id, void *event_data);
 
 /**
- * @brief Check if WiFi is connected
- * @return 1 if connected, 0 if disconnected
+ * @brief Kiểm tra Wi-Fi đã kết nối chưa
+ * @return 1 nếu đã kết nối, 0 nếu chưa
  */
 uint8_t wifi_is_connected(void);
 
-/** Snapshot current STA identity and IPv4 information for diagnostics UI. */
+/** Chụp nhanh danh tính STA hiện tại và thông tin IPv4 cho UI chẩn đoán. */
 void wifi_get_sta_status(wifi_sta_status_t *status);
 
-/** True when either the Wi-Fi station or W5500 Ethernet has an IP address. */
+/** True khi station Wi-Fi hoặc W5500 Ethernet có địa chỉ IP. */
 uint8_t network_is_connected(void);
 
-/** Serialize Wi-Fi scans from the portal and the background profile selector. */
+/** Tuần tự hóa quét Wi-Fi giữa portal và trình chọn profile nền. */
 bool wifi_scan_lock(uint32_t timeout_ms);
 void wifi_scan_unlock(void);
 
-/** Local configuration AP state. */
+/** Trạng thái AP cấu hình cục bộ. */
 bool wifi_ap_is_active(void);
 uint8_t wifi_ap_client_count(void);
 
-/** Stop the local AP when the application has confirmed it is idle. */
+/** Dừng AP cục bộ khi ứng dụng xác nhận đã nhàn rỗi. */
 esp_err_t wifi_stop_config_ap(void);
 
 /**
- * @brief Toggle the operator-requested rescue AP latch.
+ * @brief Bật/tắt latch Rescue AP do người vận hành yêu cầu.
  *
- * When enabled, the AP stays available even while STA is healthy.  Disabling
- * the latch restores the normal policy: the AP is stopped only when STA is
- * healthy and no configuration client is connected.
+ * Khi bật, AP vẫn khả dụng ngay cả khi STA khỏe mạnh. Tắt latch sẽ khôi
+ * phục chính sách bình thường: AP chỉ dừng khi STA khỏe và không có client
+ * cấu hình đang kết nối.
  */
 esp_err_t wifi_toggle_rescue_ap(bool *enabled);
 
-/** @brief True when the local AP has been explicitly requested by long-press. */
+/** @brief True khi AP cục bộ đã được yêu cầu rõ ràng bằng nhấn giữ. */
 bool wifi_rescue_ap_is_enabled(void);
 
 #endif // _WIFI_INIT_H_

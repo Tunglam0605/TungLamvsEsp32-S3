@@ -44,16 +44,16 @@
 #include "queues.h"
 #include <time.h>
 
-/* MQTT Topics */
-#define MQTT_EVENT_TOPIC    "callbox/%s/event"    // Publish
-#define MQTT_CMD_TOPIC      "callbox/%s/cmd"      // Subscribe
-#define MQTT_STATUS_TOPIC   "callbox/%s/status"   // Publish
+/* Chủ đề MQTT */
+#define MQTT_EVENT_TOPIC    "callbox/%s/event"    // Xuất bản (publish)
+#define MQTT_CMD_TOPIC      "callbox/%s/cmd"      // Đăng ký nhận (subscribe)
+#define MQTT_STATUS_TOPIC   "callbox/%s/status"   // Xuất bản (publish)
 #define CALLBOX_FIRMWARE_VERSION "1.2.0"
 
-/* MQTT QoS */
+/* QoS MQTT */
 #define MQTT_QoS 1
 
-/* Heartbeat interval in seconds */
+/* Khoảng thời gian heartbeat (giây) */
 #define HEARTBEAT_INTERVAL_SEC 15
 
 typedef struct {
@@ -64,36 +64,36 @@ typedef struct {
 } MQTTMsg_t;
 
 /**
- * @brief Initialize MQTT client
+ * @brief Khởi tạo client MQTT
  */
 void mqtt_client_init(void);
 
 /**
- * @brief Connect to MQTT broker
+ * @brief Kết nối tới broker MQTT
  */
 void mqtt_client_connect(void);
 
-/** Recreate the ESP-MQTT connection after endpoint/security settings change. */
+/** Tạo lại kết nối ESP-MQTT sau khi cấu hình endpoint/bảo mật thay đổi. */
 void mqtt_client_reconfigure(void);
 
 /**
- * @brief Subscribe to command topic
+ * @brief Đăng ký nhận topic lệnh
  */
 void mqtt_client_subscribe_cmd(void);
 
 /**
- * @brief Publish one task-scoped call event.
+ * @brief Publish một sự kiện call theo phạm vi task.
  */
 void mqtt_publish_call(int task, uint32_t seq, uint32_t timestamp);
 
-/** @brief Publish one task-scoped cancel event. */
+/** @brief Publish một sự kiện cancel theo phạm vi task. */
 void mqtt_publish_cancel(int task, uint32_t seq, uint32_t timestamp);
 
-/** @brief Publish the device-scoped WCS reconciliation request. */
+/** @brief Publish yêu cầu đồng bộ WCS theo phạm vi thiết bị. */
 void mqtt_publish_sync_request(uint32_t seq, uint32_t timestamp);
 
 /**
- * @brief Publish heartbeat/status
+ * @brief Publish heartbeat/trạng thái
  */
 void mqtt_publish_status(void);
 

@@ -1,21 +1,21 @@
 /**
  * @file    tca9554.c
- * @brief   Generic TCA9554/PCA9554 8-bit I2C I/O expander driver.
+ * @brief   Triển khai driver IC mở rộng I/O 8-bit TCA9554/PCA9554 qua I2C.
  *
- *          Implements the register operations exposed by tca9554.h.
- *          The register map is an implementation detail and stays private
- *          to this translation unit.
+ *          Cài đặt các thao tác thanh ghi đã khai báo ở tca9554.h.
+ *          Bản đồ thanh ghi là chi tiết triển khai và được giữ kín trong
+ *          tệp này.
  *
- * @note    Thread safety: the driver is NOT thread-safe. It keeps instance
- *          state (bus/device handle, address, timeout) but does not create
- *          a mutex. The caller owns serialization of all I2C transactions
- *          (e.g. BSP_DO serializes read-modify-write of the OUTPUT register).
+ * @note    An toàn luồng: driver KHÔNG an toàn luồng. Nó giữ trạng thái
+ *          instance (handle bus/device, địa chỉ, timeout) nhưng không tạo
+ *          mutex. Người gọi chịu trách nhiệm tuần tự hóa mọi giao dịch I2C
+ *          (ví dụ BSP_DO tuần tự hóa read-modify-write thanh ghi OUTPUT).
  *
  * @author  TungLamAutomation <tunglam652004@gmail.com>
  * @version 1.0.0
  * @date    2026
  *
- * @see     tca9554.h — public driver API
+ * @see     tca9554.h — API driver công khai (public)
  */
 #include "tca9554.h"
 
@@ -23,16 +23,16 @@
 
 static const char *TAG = "TCA9554";
 
-/* Register map — implementation detail, not exposed publicly.
- * CONFIG bit = 1 → input, bit = 0 → output. */
+/* Bản đồ thanh ghi — chi tiết triển khai, không công bố ra ngoài.
+ * Bit CONFIG = 1 → đầu vào, bit = 0 → đầu ra. */
 #define TCA9554_REG_INPUT    0x00
 #define TCA9554_REG_OUTPUT   0x01
 #define TCA9554_REG_POLARITY 0x02
 #define TCA9554_REG_CONFIG   0x03
 
-/* A stalled SDA/SCL line must return an error, never block the application
- * forever.  Normal two-byte TCA9554 writes complete in a few milliseconds;
- * the value itself comes from the instance config. */
+/* Một đường SDA/SCL bị kẹt phải trả về lỗi, không bao giờ chặn ứng dụng
+ * vô thời hạn. Ghi 2 byte thông thường của TCA9554 xong trong vài ms;
+ * giá trị timeout lấy từ cấu hình instance. */
 #define TCA9554_MS_TIMEOUT_FALLBACK 100U
 
 static bool tca9554_pin_valid(uint8_t pin)
@@ -76,7 +76,7 @@ esp_err_t tca9554_init(tca9554_t *dev, const tca9554_config_t *config,
         return ret;
     }
 
-    /* Direction: all pins as outputs (CONFIG = 0x00). */
+    /* Hướng: tất cả chân làm đầu ra (CONFIG = 0x00). */
     ret = tca9554_write_byte(dev, TCA9554_REG_CONFIG, 0x00);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to configure TCA9554 outputs: %s", esp_err_to_name(ret));
@@ -85,8 +85,8 @@ esp_err_t tca9554_init(tca9554_t *dev, const tca9554_config_t *config,
         return ret;
     }
 
-    /* Initial raw electrical output byte (e.g. 0xFF = all inactive for
-     * active-low outputs). */
+    /* Byte đầu ra điện mức thô ban đầu (vd. 0xFF = mọi đầu ra active-low
+     * đều tắt). */
     ret = tca9554_write_byte(dev, TCA9554_REG_OUTPUT, initial_outputs);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to init TCA9554 outputs: %s", esp_err_to_name(ret));

@@ -53,7 +53,7 @@ typedef struct {
     uint8_t btn_2;  /* Task 2: Supply Empty Cart (Green) */
     uint8_t btn_3;  /* Cancel */
 
-    /* Additional digital inputs (DI4-DI8) - reserved */
+    /* Các đầu vào số còn lại (DI4-DI8) — dự phòng */
     uint8_t di_4;
     uint8_t di_5;
     uint8_t di_6;
@@ -74,7 +74,7 @@ QueueHandle_t io_handler_get_io_queue(void);
 QueueHandle_t io_handler_get_button_event_queue(void);
 
 /** @brief Lấy queue nhận lệnh LED/buzzer từ máy trạng thái (size 1 phần tử). */
-/* Debounced logical input mask; bit 0 = DI1, active = pressed. */
+/* Mặt nạ đầu vào logic đã debounce; bit 0 = DI1, active = đang nhấn. */
 /**
  * @brief Trả về mask đầu vào đã chống nhiễu (bit đặt = nút đang nhấn).
  * @return Bit 0..2 ứng với btn_task1/btn_task2/btn_cancel theo mapping.

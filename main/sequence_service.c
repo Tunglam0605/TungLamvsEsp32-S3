@@ -1,6 +1,6 @@
 /**
  * @file sequence_service.c
- * @brief Single owner of the Callbox global event sequence.
+ * @brief Chủ sở hữu duy nhất của chuỗi sự kiện toàn cục Callbox.
  */
 #include "sequence_service.h"
 
@@ -46,8 +46,8 @@ esp_err_t sequence_next(uint32_t *sequence)
         err = ESP_ERR_INVALID_SIZE;
     } else {
         const uint32_t candidate = s_high_watermark + 1U;
-        /* Persist before exposing a number: power loss may skip a number, but
-         * can never cause the device to reuse an already issued one. */
+        /* Lưu trước khi phơi bày số: mất điện có thể bỏ qua một số, nhưng
+         * không bao giờ khiến thiết bị tái sử dụng số đã cấp. */
         err = nvs_save_seq_num(candidate);
         if (err == ESP_OK) {
             s_high_watermark = candidate;
