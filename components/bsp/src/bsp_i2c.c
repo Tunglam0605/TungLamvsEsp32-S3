@@ -34,7 +34,6 @@ static const char *TAG = "BSP_I2C";
 #define BSP_I2C_PORT        I2C_NUM_1
 #define BSP_I2C_SCL_GPIO    GPIO_NUM_41
 #define BSP_I2C_SDA_GPIO    GPIO_NUM_42
-#define BSP_I2C_FREQ_HZ     400000
 
 /* Handle bus — static; chỉ một luồng init/deinit qua bsp_board. */
 static i2c_master_bus_handle_t s_i2c_bus = NULL;

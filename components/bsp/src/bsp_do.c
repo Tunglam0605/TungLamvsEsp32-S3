@@ -94,7 +94,7 @@ esp_err_t bsp_do_init(void)
     i2c_master_bus_handle_t bus = bsp_i2c_get_bus();
     if (bus == NULL) {
         ESP_LOGE(TAG, "Board I2C bus not initialized (bsp_i2c_init missing?)");
-        s_do_mutex = NULL;   /* Chưa dùng tới mutex → trả trạng thái sạch */
+        bsp_do_cleanup_partial_init();
         return ESP_ERR_INVALID_STATE;
     }
 
