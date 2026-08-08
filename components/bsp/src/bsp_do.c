@@ -6,16 +6,14 @@
  *          Trạng thái thực tế được lưu trong shadow register (s_out_shadow)
  *          để đọc lại mà không cần giao dịch I2C.
  *
- *          ═══ I2C CỦA EXPANDER ═══
- *          ┌──────────────┬──────────────┐
- *          │ SCL          │ GPIO 41      │
- *          │ SDA          │ GPIO 42      │
- *          │ I2C port     │ I2C_NUM_1    │
- *          │ Tần số       │ 400 kHz      │
- *          └──────────────┴──────────────┘
+ *          ═══ OWNERSHIP (SAU PHASE C) ═══
+ *          BSP_DO consume bus I2C do board sở hữu (bsp_i2c) — KHÔNG tạo/xóa
+ *          bus. BSP_DO sở hữu: TCA device instance, address 0x20, tốc độ
+ *          400 kHz của device, timeout, mutex, shadow, active-low policy,
+ *          safe OUTPUT 0xFF, all-output CONFIG policy.
  *
- * @note    Đầu ra active-low: shadow bit = 1 → điện HIGH → đầu ra TẮT (OFF);
- *          shadow bit = 0 → điện LOW → đầu ra KÍCH HOẠT (ON).
+ * @note    Đầu ra active-low: shadow bit = 1 = điện HIGH = đầu ra TẮT (OFF);
+ *          shadow bit = 0 = điện LOW = đầu ra KÍCH HOẠT (ON).
  *          Shadow khởi tạo 0xFF = tất cả OFF.
  *
  * @author  TungLamAutomation <tunglam652004@gmail.com>
@@ -23,10 +21,12 @@
  * @date    2026
  *
  * @see     bsp_do.h — API đầu ra số
+ * @see     bsp_i2c.h — bus I2C board (private) — bus này consume
  * @see     tca9554.h — driver TCA9554 cấp thấp
  */
 #include "bsp_do.h"
 #include "bsp_board.h"
+#include "bsp_i2c.h"
 #include "tca9554.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
@@ -37,67 +37,46 @@ static const char *TAG = "BSP_DO";
 
 /*
  * Biến toàn cục: instance expander + shadow register của đầu ra.
- *
- * Gọn chân I2C cho TCA9554PWR trên board Waveshare:
- *   SCL = GPIO41, SDA = GPIO42, I2C_NUM_1, 400 kHz.
- * Đầu ra active-low: shadow bit 1 → điện HIGH → TẮT; bit 0 → điện LOW → ON.
+ * Đầu ra active-low: shadow bit 1 = điện HIGH = TẮT; bit 0 = điện LOW = ON.
  */
-#define BSP_I2C_PORT        I2C_NUM_1
-#define BSP_I2C_SCL_GPIO    GPIO_NUM_41
-#define BSP_I2C_SDA_GPIO    GPIO_NUM_42
-#define BSP_I2C_FREQ_HZ     400000
 /* Địa chỉ 7-bit của TCA9554 trên board này (A0/A1 nối GND). */
 #define BSP_TCA9554_ADDR    0x20
+/* Tần số SCL của TCA9554 (device-level, KHÔNG phải bus-level). */
+#define BSP_DO_EXPANDER_FREQ_HZ 400000
 /* Thời gian chờ tối đa cho giao dịch I2C với expander (ms). */
 #define BSP_DO_EXPANDER_TIMEOUT_MS 100U
 #define BSP_DO_MUTEX_TIMEOUT_MS 50U
 
 static tca9554_t s_expander;                 /* Instance TCA: chỉ handle device + timeout (zero-init static) */
-static i2c_master_bus_handle_t s_i2c_bus = NULL;  /* Bus I2C — BSP sở hữu (tạm thời đến Phase C) */
 static uint8_t s_out_shadow = 0xFF;   /* 0xFF = tất cả inactive (active-low) */
 static SemaphoreHandle_t s_do_mutex = NULL;
 
 /*
- * Dọn dẹp khi init thất bại (chỉ dùng trong bsp_do_init).
- * Thứ tự bắt buộc: detach TCA device → xóa I2C bus → xóa mutex.
+ * Dọn dọn khi init thất bại (chỉ dùng trong bsp_do_init).
+ * SAU PHASE C: bus I2C thuộc board layer (bsp_i2c) — bsp_do KHÔNG xóa bus.
  *
- * - Nếu device detach fail: log lỗi, GIỮ nguyên handle device (driver đã
- *   đảm bảo); KHÔNG xóa bus (bus vẫn còn child device) → tránh state giả.
- *   KHÔNG early-return: vẫn phải tiếp tục giải phóng mutex và reset shadow.
- * - i2c_del_master_bus(): kiểm tra và log lỗi; chỉ NULL s_i2c_bus khi
- *   delete thực sự thành công (ESP_OK).
+ * - Nếu device detach lỗi: log lỗi, GIỮ nguyên handle (driver đã đảm bảo).
  * - Mutex luôn được xóa khi đã được tạo — không được leak.
+ * - Shadow reset 0xFF (all-OFF an toàn).
  * - Primary error của caller luôn được giữ nguyên; lỗi cleanup chỉ log.
  */
 static void bsp_do_cleanup_partial_init(void)
 {
-    /* 1) TCA device — detach trước (nếu còn active). */
+    /* 1) TCA device — detach nếu chính bsp_do đã attach (không phải bus). */
     if (s_expander.dev != NULL) {
         if (tca9554_deinit(&s_expander) != ESP_OK) {
             ESP_LOGE(TAG, "TCA device detach failed during init cleanup; "
-                          "keeping bus (child device still attached)");
-            /* KHÔNG return — tiếp tục dọn mutex và reset shadow. */
+                          "keeping device handle (board layer owns the bus)");
         }
     }
 
-    /* 2) I2C bus — chỉ xóa khi KHÔNG còn child device (dev đã detach thành
-       công hoặc chưa bao giờ attach; detach fail → giữ bus). */
-    if (s_expander.dev == NULL && s_i2c_bus != NULL) {
-        esp_err_t ret = i2c_del_master_bus(s_i2c_bus);
-        if (ret == ESP_OK) {
-            s_i2c_bus = NULL;   /* Chỉ NULL khi delete thực sự thành công. */
-        } else {
-            ESP_LOGE(TAG, "Failed to delete I2C bus: %s", esp_err_to_name(ret));
-        }
-    }
-
-    /* 3) Mutex — không được leak khi init thất bại sau khi tạo. */
+    /* 2) Mutex — không được leak khi init thất bại sau khi tạo. */
     if (s_do_mutex != NULL) {
         vSemaphoreDelete(s_do_mutex);
         s_do_mutex = NULL;
     }
 
-    /* 4) Reset trạng thái logic: luôn để về all-OFF an toàn. */
+    /* 3) Reset trạng thái logic: luôn để về all-OFF an toàn. */
     s_out_shadow = 0xFF;
 }
 
@@ -109,48 +88,35 @@ esp_err_t bsp_do_init(void)
         return ESP_ERR_NO_MEM;
     }
 
-    /*
-     * BƯỚC 1 — Tạo bus I2C master.
-     *   - i2c_port: I2C_NUM_1 (chọn controller thứ 2 của ESP32-S3)
-     *   - scl/sda: GPIO 41/42 theo sơ đồ board
-     *   - glitch_ignore_cnt: 7 — bỏ qua nhiễu SCL ngắn
-     *   - enable_internal_pullup: dùng điện trở kéo lên nội bộ cho SDA/SCL
-     */
-    i2c_master_bus_config_t bus_cfg = {
-        .i2c_port        = BSP_I2C_PORT,
-        .sda_io_num      = BSP_I2C_SDA_GPIO,
-        .scl_io_num      = BSP_I2C_SCL_GPIO,
-        .clk_source      = I2C_CLK_SRC_DEFAULT,
-        .glitch_ignore_cnt = 7,
-        .flags.enable_internal_pullup = true,
-    };
-
-    esp_err_t ret = i2c_new_master_bus(&bus_cfg, &s_i2c_bus);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to create I2C bus: %s", esp_err_to_name(ret));
-        s_i2c_bus = NULL;                 /* Bus không tồn tại; mutex chưa dùng */
-        bsp_do_cleanup_partial_init();    /* Xóa mutex (nếu có) — không leak */
-        return ret;
+    /* Lấy bus I2C board do board layer sở hữu (bsp_i2c). BSP_DO KHÔNG tạo
+     * bus — đây là tài nguyên của BOARD, phải được bsp_board_init khởi tạo
+     * trước (order: DI → bsp_i2c → DO → buzzer). */
+    i2c_master_bus_handle_t bus = bsp_i2c_get_bus();
+    if (bus == NULL) {
+        ESP_LOGE(TAG, "Board I2C bus not initialized (bsp_i2c_init missing?)");
+        s_do_mutex = NULL;   /* Chưa dùng tới mutex → trả trạng thái sạch */
+        return ESP_ERR_INVALID_STATE;
     }
 
-    /* BƯỚC 2 — Gắn IC mở rộng (driver generic chỉ add device; không đụng
-     * thanh ghi). Bus/address/clock/timeout là thông tin board truyền vào. */
+    /* BƯỚC 1 — Gắn IC mở rộng (driver generic chỉ add device; không đụng
+     * thanh ghi). TCA address 0x20 + SCL 400 kHz + timeout là thông tin
+     * của BOARD/DEVICE, do BSP_DO truyền vào. */
     const tca9554_config_t tca_cfg = {
-        .bus = s_i2c_bus,
+        .bus = bus,
         .address = BSP_TCA9554_ADDR,
-        .clock_hz = BSP_I2C_FREQ_HZ,
+        .clock_hz = BSP_DO_EXPANDER_FREQ_HZ,
         .timeout_ms = BSP_DO_EXPANDER_TIMEOUT_MS,
     };
-    ret = tca9554_init(&s_expander, &tca_cfg);
+    esp_err_t ret = tca9554_init(&s_expander, &tca_cfg);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to init expander: %s", esp_err_to_name(ret));
         bsp_do_cleanup_partial_init();
         return ret;
     }
 
-    /* BƯỚC 3 — Trình tự khởi tạo an toàn (không tạo output glitch):
-     *   1) preset thanh ghi OUTPUT = 0xFF (mọi chân điện HIGH = đầu ra
-     *      active-low đều OFF) — latch an toàn sẵn sàng TRƯỚC khi enable.
+    /* BƯỚC 2 — Trình tự khởi tạo an toàn (không tạo output glitch):
+     *   1) preset OUTPUT = 0xFF (mọi chân điện HIGH = đầu ra active-low
+     *      đều OFF) — latch an toàn sẵn sàng TRƯỚC khi enable.
      *   2) CONFIG = 0x00 (tất cả chân thành output) — latch đã chứa safe
      *      state, không output nào bị kích hoạt.
      *   3) s_out_shadow = 0xFF đồng bộ với phần cứng.
