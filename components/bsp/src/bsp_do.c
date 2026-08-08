@@ -22,13 +22,14 @@
  * @date    2026
  *
  * @see     bsp_do.h — API đầu ra số
- * @see     bsp_expander.c — driver TCA9554 cấp thấp
+ * @see     tca9554.h — driver TCA9554 cấp thấp
  */
 #include "bsp_do.h"
 #include "bsp_board.h"
-#include "bsp_expander.h"
+#include "tca9554.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
 static const char *TAG = "BSP_DO";
@@ -45,9 +46,13 @@ static const char *TAG = "BSP_DO";
 #define BSP_I2C_SCL_GPIO    GPIO_NUM_41
 #define BSP_I2C_SDA_GPIO    GPIO_NUM_42
 #define BSP_I2C_FREQ_HZ     400000
+/* TCA9554 7-bit address on this board (A0/A1 tied low). */
+#define BSP_TCA9554_ADDR    0x20
+/* I2C transaction timeout for expander traffic (ms). */
+#define BSP_DO_EXPANDER_TIMEOUT_MS 100U
 #define BSP_DO_MUTEX_TIMEOUT_MS 50U
 
-static bsp_expander_t s_expander;
+static tca9554_t s_expander;
 static uint8_t s_out_shadow = 0xFF;   /* 0xFF = tất cả inactive (active-low) */
 static SemaphoreHandle_t s_do_mutex = NULL;
 
@@ -82,8 +87,16 @@ esp_err_t bsp_do_init(void)
     }
 
     /* BƯỚC 2 — Khởi tạo IC mở rộng trên bus vừa tạo.
-     * outputs_all_low = false: sau khi init, 8 đầu ra tắt (0xFF). */
-    ret = bsp_expander_init(&s_expander, s_expander.bus, BSP_I2C_FREQ_HZ, false);
+     * Driver generic nhận address/clock/timeout qua config; BSP truyền
+     * board address 0x20. initial_outputs=0xFF: sau khi init, 8 đầu ra
+     * inactive (đúng active-low). */
+    const tca9554_config_t tca_cfg = {
+        .bus = s_expander.bus,
+        .address = BSP_TCA9554_ADDR,
+        .clock_hz = BSP_I2C_FREQ_HZ,
+        .timeout_ms = BSP_DO_EXPANDER_TIMEOUT_MS,
+    };
+    ret = tca9554_init(&s_expander, &tca_cfg, 0xFF);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to init expander: %s", esp_err_to_name(ret));
         return ret;
@@ -93,7 +106,7 @@ esp_err_t bsp_do_init(void)
      * Giữ shadow và chip luôn khớp nhau để bsp_do_write sau này chỉ việc
      * sửa bit trong shadow rồi ghi toàn bộ 1 lần. */
     s_out_shadow = 0xFF;
-    ret = bsp_expander_write_all(&s_expander, s_out_shadow);
+    ret = tca9554_write_outputs(&s_expander, s_out_shadow);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to init outputs: %s", esp_err_to_name(ret));
         return ret;
@@ -120,7 +133,7 @@ esp_err_t bsp_do_write(bsp_do_channel_t channel, bool active)
     }
     if (active) s_out_shadow &= ~(1u << channel);
     else s_out_shadow |= (1u << channel);
-    esp_err_t ret = bsp_expander_write_all(&s_expander, s_out_shadow);
+    esp_err_t ret = tca9554_write_outputs(&s_expander, s_out_shadow);
     xSemaphoreGive(s_do_mutex);
     return ret;
 }
@@ -134,7 +147,7 @@ esp_err_t bsp_do_write_mask(uint8_t active_mask)
         return ESP_ERR_TIMEOUT;
     }
     s_out_shadow = (uint8_t)(~active_mask);
-    esp_err_t ret = bsp_expander_write_all(&s_expander, s_out_shadow);
+    esp_err_t ret = tca9554_write_outputs(&s_expander, s_out_shadow);
     xSemaphoreGive(s_do_mutex);
     return ret;
 }

@@ -28,7 +28,7 @@
  * @date    2026
  *
  * @see     bsp_types.h — định nghĩa kênh BSP_DO_x
- * @see     bsp_expander.h — driver TCA9554 cấp thấp
+ * @see     tca9554.h — driver TCA9554 cấp thấp
  * @see     bsp_board.h — khởi tạo cùng toàn board
  */
 #ifndef BSP_DO_H
