@@ -44,6 +44,7 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_err.h"
+#include "esp_mac.h"
 #include "queues.h"
 #include "io_handler.h"
 #include "led_control.h"
@@ -136,6 +137,47 @@ static void load_config_from_nvs(void)
     g_config.callbox_id[sizeof(g_config.callbox_id) - 1] = '\0';
 }
 
+/* Build the commissioning identity in the application layer.  The base name
+ * remains the stable password, while the SSID adds a suffix from the factory
+ * base MAC to distinguish boards which temporarily share one Callbox ID. */
+static void build_configuration_ap_identity(const char *callbox_id,
+                                            char *ap_ssid, size_t ap_ssid_size,
+                                            char *ap_password, size_t ap_password_size)
+{
+    const char *id = (callbox_id && callbox_id[0]) ? callbox_id : "001";
+    const int base_length = snprintf(ap_password, ap_password_size, "CALLBOX-%s", id);
+    if (base_length < 0 || (size_t)base_length >= ap_password_size) {
+        /* Config_t currently limits callbox_id to 15 bytes, so this only
+         * protects future changes.  Keep boot deterministic and safe. */
+        ESP_LOGW(TAG, "Callbox ID is too long for AP identity; using CALLBOX-001");
+        (void)snprintf(ap_password, ap_password_size, "CALLBOX-001");
+    }
+
+    uint8_t mac[6] = { 0 };
+    const esp_err_t mac_ret = esp_efuse_mac_get_default(mac);
+    if (mac_ret != ESP_OK) {
+        ESP_LOGW(TAG, "Cannot read factory base MAC (%s); using AP identity without suffix",
+                 esp_err_to_name(mac_ret));
+        (void)snprintf(ap_ssid, ap_ssid_size, "%s", ap_password);
+        ESP_LOGI(TAG, "Configuration AP identity: %s", ap_ssid);
+        return;
+    }
+
+    const int ssid_length = snprintf(ap_ssid, ap_ssid_size, "%s-%02X%02X%02X",
+                                     ap_password, mac[3], mac[4], mac[5]);
+    if (ssid_length < 0 || (size_t)ssid_length >= ap_ssid_size) {
+        /* The configured 33-byte SSID buffer and numeric Callbox ID leave
+         * enough space today.  If that invariant changes, prefer a usable
+         * old-format AP over emitting a truncated hardware identity. */
+        ESP_LOGW(TAG, "AP identity exceeds SSID buffer; using identity without MAC suffix");
+        (void)snprintf(ap_ssid, ap_ssid_size, "%s", ap_password);
+    }
+
+    ESP_LOGI(TAG, "Device factory MAC: %02X:%02X:%02X:%02X:%02X:%02X",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    ESP_LOGI(TAG, "Configuration AP identity: %s", ap_ssid);
+}
+
 /* Lưu seq_num hiện tại xuống NVS (định kỳ trong vòng lặp chính) */
 /* Hàm callback cho wifi_init: mở portal cấu hình ngay khi AP sẵn sàng */
 static void start_config_portal_when_ap_is_ready(void)
@@ -199,12 +241,14 @@ void app_main(void)
     state_machine_init();
     ESP_LOGI(TAG, "Hardware initialized");
 
-    /* Bước 6: Wi-Fi APSTA — SSID và mật khẩu đều là "CALLBOX-<id>".
-     * Portal cấu hình sẽ tự mở khi AP sẵn sàng (callback). */
+    /* Bước 6: Wi-Fi APSTA.  SSID carries a factory-MAC suffix for local
+     * commissioning identity; password stays CALLBOX-<id>. */
     char ap_ssid[33];
-    snprintf(ap_ssid, sizeof(ap_ssid), "CALLBOX-%s", g_config.callbox_id);
+    char ap_password[33];
+    build_configuration_ap_identity(g_config.callbox_id, ap_ssid, sizeof(ap_ssid),
+                                    ap_password, sizeof(ap_password));
     wifi_set_config_ap_callback(start_config_portal_when_ap_is_ready);
-    esp_err_t wifi_ret = wifi_init_sta_profiles(&g_config, ap_ssid, ap_ssid);
+    esp_err_t wifi_ret = wifi_init_sta_profiles(&g_config, ap_ssid, ap_password);
     if (wifi_ret != ESP_OK) {
         ESP_LOGE(TAG, "WiFi STA/AP init failed: %s", esp_err_to_name(wifi_ret));
     }
