@@ -18,4 +18,4 @@ idf_component_register(SRCS "output_renderer.c" "protocol_types.c" "app_event_qu
                     INCLUDE_DIRS "."
                     EMBED_FILES "../img/company-logo-transparent.png"
                     REQUIRES freertos nvs_flash esp_wifi esp_netif esp_event esp_timer
-                             bsp esp_http_server mqtt mbedtls lwip)
+                             bsp esp_http_server mqtt mbedtls lwip platform_time)
