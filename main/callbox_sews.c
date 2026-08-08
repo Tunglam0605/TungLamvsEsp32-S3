@@ -25,7 +25,7 @@
  *          lưu seq_num hiện tại xuống NVS — các task khác đã được tạo và
  *          chạy độc lập.
  *
- * @note    Các giá trị factory default (AGV1 / 123456789 / broker …)
+ * @note    Các giá trị factory default (AGV1 và Robotics AUBOT 1 / 123456789 / broker …)
  *          chỉ được dùng khi NVS trống; người dùng có thể thay đổi qua
  *          portal cấu hình (config_portal).
  *
@@ -73,8 +73,9 @@ Config_t g_config = {
     .wifi_pass = "123456789",
     .wifi_profiles = {
         { .ssid = "AGV1", .password = "123456789" },
+        { .ssid = "Robotics AUBOT 1", .password = "123456789" },
     },
-    .wifi_profile_count = 1,
+    .wifi_profile_count = 2,
     .wifi_dhcp = true,
     .wifi_ip = "",
     .wifi_netmask = "",
@@ -102,6 +103,7 @@ static void load_config_from_nvs(void)
 
     /* Recover factory defaults if an older build stored empty shared settings. */
     if (g_config.wifi_profile_count == 0 || g_config.wifi_ssid[0] == '\0') {
+        config_add_wifi_profile(&g_config, "Robotics AUBOT 1", "123456789");
         config_add_wifi_profile(&g_config, "AGV1", "123456789");
     }
     if (g_config.mqtt_broker[0] == '\0') {

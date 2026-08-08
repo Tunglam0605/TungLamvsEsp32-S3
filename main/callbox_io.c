@@ -10,13 +10,13 @@
  *          ┌───────────────────────────┬───────────────────────────────┐
  *          │ ĐẦU VÀO                   │ ĐẦU RA                       │
  *          ├───────────────────────────┼───────────────────────────────┤
- *          │ DI1 GPIO4  nút task 1      │ DO1 P0  buzzer               │
+ *          │ DI1 GPIO4  nút cancel      │ DO1 P0  buzzer               │
  *          │ DI2 GPIO5  nút task 2      │ DO2 P1  tower đỏ             │
- *          │ DI3 GPIO6  nút cancel      │ DO3 P2  tower vàng           │
+ *          │ DI3 GPIO6  nút task 1      │ DO3 P2  tower vàng           │
  *          │ DI4..DI8  không dùng       │ DO4 P3  tower xanh           │
- *          │                            │ DO5 P4  LED task 1           │
+ *          │                            │ DO5 P4  LED nút Cancel       │
  *          │                            │ DO6 P5  LED task 2           │
- *          │                            │ DO7 P6  LED cancel           │
+ *          │                            │ DO7 P6  LED nút task 1       │
  *          │                            │ DO8 P7  LED trạng thái AP    │
  *          └───────────────────────────┴───────────────────────────────┘
  *
@@ -39,27 +39,27 @@
  * firmware (BUZZER_PIN=1, TOWER_RED=2, TOWER_YELLOW=3, TOWER_GREEN=4,
  * LED_BTN_1=5, LED_BTN_2=6, LED_BTN_3=7). DO map to TCA output bits 0..7.
  *
- *   DI1  GPIO4  button task 1      DO1 P0  buzzer
+ *   DI1  GPIO4  button cancel      DO1 P0  buzzer
  *   DI2  GPIO5  button task 2      DO2 P1  tower red
- *   DI3  GPIO6  button cancel      DO3 P2  tower yellow
+ *   DI3  GPIO6  button task 1      DO3 P2  tower yellow
  *   DI4..DI8 unused                DO4 P3  tower green
- *                                  DO5 P4  LED task 1
+ *                                  DO5 P4  LED cancel
  *                                  DO6 P5  LED task 2
- *                                  DO7 P6  LED cancel
+ *                                  DO7 P6  LED task 1
  *                                  DO8 P7  AP status LED
  *
  * If the physical board is rewired, change ONLY this file.
  */
 static const callbox_io_mapping_t s_mapping = {
-    /* Đầu vào: 3 nút chính trên DI1..DI3 */
-    .btn_task1     = BSP_DI_1,
+    /* Đầu vào thực tế: Hủy=DI1, Task 2=DI2, Task 1=DI3. */
+    .btn_task1     = BSP_DI_3,
     .btn_task2     = BSP_DI_2,
-    .btn_cancel    = BSP_DI_3,
+    .btn_cancel    = BSP_DI_1,
 
-    /* Đầu ra: LED bên trong từng nút (DO5..DO7), đèn trạng thái AP (DO8) */
-    .led_task1     = BSP_DO_5,
+    /* LED đi cùng vị trí nút vật lý: Cancel=DO5, Task 2=DO6, Task 1=DO7. */
+    .led_task1     = BSP_DO_7,
     .led_task2     = BSP_DO_6,
-    .led_cancel    = BSP_DO_7,
+    .led_cancel    = BSP_DO_5,
     .ap_status     = BSP_DO_8,
 
     /* Đèn tower: đỏ (DO2), vàng (DO3), xanh (DO4) */

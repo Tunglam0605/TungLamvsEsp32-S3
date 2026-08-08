@@ -10,16 +10,16 @@
  *          ┌───────────────┬───────────┬───────────────────────────────┐
  *          │ Vai trò       │ Kênh      │ Mô tả                         │
  *          ├───────────────┼───────────┼───────────────────────────────┤
- *          │ btn_task1     │ DI1       │ Nút Exchange Cart             │
+ *          │ btn_task1     │ DI3       │ Nút Exchange Cart             │
  *          │ btn_task2     │ DI2       │ Nút Supply Empty              │
- *          │ btn_cancel    │ DI3       │ Nút Cancel                    │
+ *          │ btn_cancel    │ DI1       │ Nút Cancel                    │
  *          │ buzzer        │ DO1       │ Loa buzzer (active-low)       │
  *          │ tower_red     │ DO2       │ Đèn tower ĐỎ                 │
  *          │ tower_yellow  │ DO3       │ Đèn tower VÀNG               │
  *          │ tower_green   │ DO4       │ Đèn tower XANH               │
- *          │ led_task1     │ DO5       │ LED nút task 1               │
+ *          │ led_task1     │ DO7       │ LED nút task 1               │
  *          │ led_task2     │ DO6       │ LED nút task 2               │
- *          │ led_cancel    │ DO7       │ LED nút Cancel               │
+ *          │ led_cancel    │ DO5       │ LED nút Cancel               │
  *          │ ap_status     │ DO8       │ LED trạng thái AP cục bộ     │
  *          └───────────────┴───────────┴───────────────────────────────┘
  *

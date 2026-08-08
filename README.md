@@ -1,217 +1,245 @@
-# Callbox SEWS (ESP32)
+# Callbox SEWS (ESP32-S3)
 
-Firmware for AGV Callbox System at SEWS Manufacturing Facility.
+Firmware cho hệ thống Callbox AGV tại nhà máy SEWS — board
+**Waveshare ESP32-S3-POE-ETH-8DI-8DO**.
 
 ## Overview
 
-This project implements an MQTT-based callbox system for the AGV (Autonomous Guided Vehicle) network. Each callbox allows line operators to request cart exchange or supply empty carts to the AGV system via push buttons.
+Mỗi callbox cho phép nhân viên chuyền yêu cầu **đổi giỏ** hoặc **cấp giỏ rỗng**
+cho hệ thống AGV bằng nút bấm, và giao tiếp với **WCS (Warehouse Control
+System)** qua MQTT. Trạng thái hiển thị bằng đèn LED trên nút, đèn tower 3 màu
+và còi phản hồi âm thanh.
 
-**Architecture:**
-- 3 illuminated push buttons (Task 1: Exchange, Task 2: Supply Empty, Task 3: Cancel)
-- 3-color tower light (Red, Yellow, Green)
-- Buzzer for audible feedback
-- MQTT communication with WCS (Warehouse Control System)
-- NVS-based sequence number persistence for reliable message delivery
+**Kiến trúc:**
+- 3 nút bấm chiếu sáng (Task 1 Đổi giỏ, Task 2 Cấp giỏ rỗng, Cancel/Hủy)
+- Đèn tower 3 màu (Đỏ / Vàng / Xanh), còi (buzz)
+- Giao tiếp MQTT với WCS qua Wi-Fi STA hoặc W5500 Ethernet
+- Sequence số bền vững qua NVS để đảm bảo giao hàng đáng tin cậy
+- Portal cấu hình web chạy trên SoftAP (không cần Internet)
 
-## Features
+## Khởi động & cấu hình
 
-- **MQTT Protocol**: Configurable broker, port and credentials
-- **Wi-Fi profiles**: Factory network `AGV1` / `123456789`, plus up to 5 remembered networks
-- **Wi-Fi setup portal**: `CALLBOX-<id>` AP opens immediately for phone setup; the STA scans and tries remembered networks in the background
-- **LED Feedback**: Task status displayed via button LEDs and tower light
-- **Heartbeat Monitoring**: Periodic status publication (configurable interval)
-- **Offline Resilience**: Automatic reconnection and configuration AP fallback
-- **NVS Storage**: Sequence numbers persisted across power cycles
+Mỗi thiết bị chạy cùng binary:
+- **SoftAP `CALLBOX-<id>`** mở ngay khi khởi động, mật khẩu **trùng SSID**
+  (ví dụ AP `CALLBOX-001` → pass `CALLBOX-001`); IP mặc định `192.168.65.204`
+- Kết nối điện thoại → truy cập `http://192.168.65.204/` để mở trang cấu hình
+- Thiết bị tự quét và kết nối (STA) vào profile Wi-Fi nhớ mạnh nhất có sẵn
+- Khi STA ổn định ≥ 30 s, AP **tự tắt** (trừ khi có client kết nối / cửa sổ
+  cấu hình còn mở / giữ nút Cancel 5 s để bật lại AP rescue)
+- Tài khoản mặc định trang portal: `aubot` (admin / password web)
+
+Nếu MQTT hoặc mạng mất, AP khôi phục tự bật để vào portal lại.
 
 ## File Structure
 
 ```
-callbox_sews/main/
-├── callbox_sews.c          # Main application entry point
-├── button_handler.c/h       # Button input handling with debounce
-├── led_control.c/h          # LED/buzzer output control
-├── mqtt_client.c/h          # MQTT client and event handler
-├── state_machine.c/h        # Task state management
-├── wifi_init.c/h            # WiFi initialization (STA mode)
-├── nvs_storage.c/h          # NVS persistence for seq_num
-└── queues.h                 # Shared data structures and queues
+TungLamvsEsp32-S3/                # Thư mục gốc dự án
+├── main/
+│   ├── callbox_sews.c            # Điểm khởi động (app_main) — khởi tạo toàn bộ
+│   ├── callbox_io.c/h            # ⭐ Bảng ánh xạ I/O (đấu dây thật) — chỉ sửa file này nếu đấu lại dây
+│   ├── io_handler.c/h            # Task đọc nút, debounce, phát sự kiện cạnh
+│   ├── button_gate.c/h           # Cổng chặn cạnh nhấn/thả (chống nhấn lặp)
+│   ├── state_machine.c/h         # Mission Manager — chủ duy nhất trạng thái nghiệp vụ
+│   ├── callbox_mqtt.h            # Đề cương MQTT: topic, task communication
+│   ├── mqtt_client.c             # Phân lớp ESP-MQTT (pub queue, reconnect, TLS)
+│   ├── protocol_types.c/h        # JSON codec cho lệnh từ WCS (accepted/assigned/...)
+│   ├── sequence_service.c/h      # Cấp số seq cá nhân (retry cùng seq)
+│   ├── output_renderer.c/h       # Render snapshot → LED/tower/buzzer
+│   ├── status.c/h                # Snapshot trạng thái liên tầng (mirror WCS)
+│   ├── app_event_queue.c/h       # Event queue nội bộ (WCS cmd, MQTT kết nối/ngắt)
+│   ├── network_status_task.c/h   # LED AP + bíp STA lên/xuống + chính sách tắt AP
+│   ├── wifi_init.c/h             # APSTA, scan/lock, cấu hình IP tĩnh, rescue AP
+│   ├── nvs_storage.c/h           # Cấu hình Wi-Fi/MQTT bền vững
+│   ├── time_sync.c/h             # SNTP (pool.ntp.org / time.google.com)
+│   ├── config_portal.c/h         # Portal HTTP cấu hình (ID, Wi-Fi, MQTT, I/O)
+│   ├── io_debug.c/h              # Tiện ích I/O cho portal /api/io-status
+│   └── led_control.c/h           # Buzzer LED queue, hiệu ứng blink
+├── components/bsp/               # Board Support Package (nút, DO, 8DI, buzzer)
+├── img/company-logo-transparent.png   # Logo nhúng cho trang portal
+├── partitions.csv                # factory 2 MB (NVS 24 KB + phy 4 KB)
+└── tools/mqtt_broker_test.py     # Script kiểm thử MQTT cho broker
 ```
 
-## MQTT Protocol
+## Giao thức MQTT
 
-### Topics
+Transport được ESP-MQTT đảm nhận (framing, keep-alive 30 s, auto-reconnect,
+TLS/CA bundle khi chọn mode `mqtts`). QoS = **1**. Heartbeat mỗi **15 giây**.
+Client ID: `AUBOT-Callbox-<id>`.
 
-- **callbox/{id}/event** - Outgoing task events (call, cancel, sync_request)
-- **callbox/{id}/cmd** - Incoming commands from WCS (accepted, assigned, locked, completed, etc.)
-- **callbox/{id}/status** - Periodic status and heartbeat (retained)
+| Topic | Chiều | Nội dung |
+|-------|-------|----------|
+| `callbox/{id}/event` | Out | `call`, `cancel`, `sync_request` |
+| `callbox/{id}/cmd` | In | `accepted`, `assigned`, `locked`, `completed`, `cancel_ack`, `rejected`, `overdue`, `sync`, `config` |
+| `callbox/{id}/status` | Out (retained) | Status + heartbeat |
 
-### Button Functions
-
-| Button | Task | Color | Action |
-|--------|------|-------|--------|
-| Button 1 | Task 1 | Yellow | Exchange cart (full → empty) |
-| Button 2 | Task 2 | Green | Supply empty cart |
-| Button 3 | Cancel | Red | Cancel current task |
-
-### Task States
-
-```
-IDLE → QUEUED (button pressed, WCS notified)
-     → ASSIGNED (WCS assigned AGV)
-     → LOCKED (AGV picked up cart, cancel locked)
-     → COMPLETED (task done)
+### Call event (button nhấn)
+```json
+{"type":"call","task":1,"seq":1042,"ts":1751791860}
 ```
 
-### LED Indicators
+### Cancel event
+```json
+{"type":"cancel","task":1,"seq":1043,"ts":1751791861}
+```
 
-| LED | Idle | Queued | Assigned | Error |
-|-----|------|--------|----------|-------|
-| Button 1/2 | Off | Blink slow | On | Blink fast |
-| Tower Yellow | Off | - | On | Blink slow |
-| Tower Red | Off | - | - | On (for errors) |
+### Sync request (reconstruct trạng thái sau khi mất MQTT)
+```json
+{"type":"sync_request","seq":1044,"ts":1751791862,"fw":"1.2.0"}
+```
 
-## Configuration
+### WCS → `accepted` / `assigned` / `locked`
+```json
+{"type":"assigned","task":1,"ref_seq":1042,"agv_id":"agv03","ts":1751791865}
+```
 
-### WiFi Settings
-Every unit uses the same firmware. On boot it scans the remembered networks and
-tries the visible one with the strongest signal. A fresh unit starts with the
-factory profile `AGV1` / `123456789`. The local access point is enabled
-immediately and remains available while a phone is connected or configuring,
-while background scans and reconnect attempts continue.
+### Rejected với reason có cấu trúc
+```json
+{"type":"rejected","task":1,"ref_seq":1042,"reason":"locked","ts":1751791870}
+```
+Reason hợp lệ: `locked`, `duplicate`, `no_task`, `wcs_busy` (không biết → `none`).
 
-Connect a phone to:
+### Heartbeat/Status (retained)
+```json
+{
+  "online": true, "comm": "ready",
+  "task1": "assigned", "task2": "idle",
+  "rssi": -55, "uptime": 86214,
+  "time_synced": true, "fw": "1.2.0", "ts": 1751791920
+}
+```
+- `comm`: `offline` | `syncing` | `ready` — sau khi reconnect, thiết bị gửi
+  `sync_request` và **không nhận nút bấm** cho đến khi WCS gửi `sync` trả về
+  trạng thái 2 task.
+- Khi mất mạng bất thường, last will với `{"online":false}` retained sẽ được
+  publish tự động.
 
-- **SSID**: `CALLBOX-cb01` (the suffix is the current callbox ID)
-- **Password**: `callbox123`
-- **Configuration page**: `http://192.168.65.204/`
+## Nút bấm & trạng thái
 
-The lightweight page is embedded in the firmware (no CDN or external JavaScript).
-Set a unique ID such as `cb01`, `cb02`, use **Scan WiFi** to select a network,
-enter its password, and save. The selected network is moved to the highest-
-priority slot; up to five profiles are stored in NVS. MQTT settings are saved at
-the same time and applied without rebooting. Press **Finish** when setup is
-complete; the AP remains available for recovery.
+| Nút | Task | Màu LED nút | Hành động |
+|-----|------|-------------|-----------|
+| Button 1 | Task 1 | Vàng | Đổi giỏ (full → empty) |
+| Button 2 | Task 2 | Xanh | Cấp giỏ rỗng |
+| Button 3 | Cancel | Đỏ | Hủy task đang chờ/đã gán; giữ 5 s = bật/tắt AP khôi phục |
 
-The same firmware binary can therefore be flashed to every callbox. Only the
-saved ID, Wi-Fi and MQTT settings differ per unit.
+### Chu trình task (do WCS điều khiển)
 
-### MQTT Settings
-- **Broker**: hostname or IP address
-- **Port**: normally `1883` or the plant-specific port such as `1884`
-- **Username/password**: optional broker credentials
+```
+IDLE → (button) → QUEUED (WCS accepted)
+                 → ASSIGNED (WCS gán AGV)
+                 → LOCKED (AGV đã lấy giỏ, cancel hết hiệu lực)
+                 → COMPLETED (về IDLE)
+```
 
-The current MQTT framing remains compatible with the existing WCS. Transport
-and TLS migration is intentionally separate from the configuration portal.
+Callbox **chỉ thay đổi trạng thái task khi WCS gửi lệnh**: bấm nút chỉ gửi
+sự kiện và mở khóa `pending`; chậm trễ/quá hạn có `retry` (mỗi 5 s, tối đa
+2 lần) và timeout hiển thị lỗi + bíp dài.
+
+### Đèn LED (bấm phím ↔ task state but code thực tế đảo hành)
+
+| Trạng thái | LED nút | Tower |
+|------------|---------|-------|
+| Đợi lệnh / mất MQTT | - | Đỏ nhấp nháy chậm (comm `syncing`/`offline`) |
+| Bấm nút, chờ thủ công | Blink chậm | Vàng |
+| WCS gán/phê duyệt | Sáng đều | Vàng (task active) |
+| Task hoàn thành | Tắt | Xanh (rảnh) |
+| Lỗi / rejected | Blink nhanh 3 nhịp | Đỏ sáng |
+| Overdue | - | Vàng nhấp nháy chậm |
+| Hủy được xác nhận | Cancel LED nhấp nháy nhanh 0,7 s | - |
+
+> `comm != ready` → tower đỏ (blink nhanh) — thiết bị không thể hoạt động tới
+> khi WCS đồng bộ xong.
+>
+> Cancel giữ ≥ 5 s bật/tắt **AP khôi phục** (3 bíp xác nhận), lock cả Cancel
+> để không gửi nhầm lệnh hủy trong lúc rescue.
+
+## Cấu hình (portal)
+
+- Đăng nhập trang web: tài khoản `aubot` / mật khẩu web (`web_password`,
+  mặc định `aubot`)
+- **Scan WiFi** → chọn mạng/cập tình hình, nhập mật khẩu, lưu. Profile mới
+  được đưa lên slot ưu tiên cao nhất; tối đa **5 profile** nhớ trong NVS.
+- **MQTT**: broker (host hoặc IP), port (mặc định `1884`), username/password
+  tùy chọn, mode **TCP** (nội bộ) hoặc **TLS** (CẢNH BÁO: TLS cần SNTP có
+  thời gian hợp lệ trước khi kết nối).
+- **IP tĩnh**: tùy chọn thay DHCP cho STA.
+- ID callbox: dạng số (ví dụ `001`, `cb01` cũ được tự chuyển thành số `001`).
+- Thay đổi áp dụng ngay không cần reboot lại; AP khôi phục vẫn mở khi cần.
 
 ## Building & Flashing
 
 ### Prerequisites
-- ESP-IDF v6.1 installed
+- ESP-IDF **v6.1** (framework cũ hơn v5.3 không promise build)
 - Waveshare ESP32-S3-POE-ETH-8DI-8DO
 - Python 3.7+
 
 ### Build
 ```bash
-cd callbox_sews
 idf.py build
 ```
 
-### Flash to ESP32
+### Flash
 ```bash
-idf.py -p /dev/ttyUSB0 flash monitor
+idf.py -p <port> flash monitor     # ví dụ COM3 hoặc /dev/ttyUSB0
 ```
 
-### Configuration Menu
+### Menuconfig
 ```bash
 idf.py menuconfig
 ```
 
 ## Hardware Setup
 
-### GPIO Mapping
+### GPIO Mapping (đấu dây WSP thực tế)
 
-| Component | GPIO | Function |
-|-----------|------|----------|
-| DI1 / Button 1 | GPIO4 | Input (active low) |
-| DI2 / Button 2 | GPIO5 | Input (active low) |
-| DI3 / Cancel | GPIO6 | Input (active low) |
-| DI4..DI8 | GPIO7..11 | Reserved digital inputs |
-| I2C SCL/SDA | GPIO41/GPIO42 | TCA9554PWR, address `0x20` |
-| DO1 / Buzzer | TCA9554 P0 | Output (active low) |
-| DO2..DO4 / Tower | TCA9554 P1..P3 | Red/yellow/green |
-| DO5..DO7 / Button LEDs | TCA9554 P4..P6 | Button 1/2/cancel |
-| DO8 | TCA9554 P7 | Reserved |
+| Thành phần | GPIO/Kênh | Chức năng |
+|------------|-----------|-----------|
+| DI1 | GPIO4 | Nút cancel (active low) |
+| DI2 | GPIO5 | Nút task 2 (active low) |
+| DI3 | GPIO6 | Nút task 1 (active low) |
+| DI4..DI8 | GPIO7..11 | Dự phòng / chưa dùng |
+| I2C SCL/SDA | GPIO41/GPIO42 | TCA9554PWR (địa chỉ `0x20`) |
+| DO1 buzzer | TCA P0 | Buzzer (active low) |
+| DO2..DO4 tower | TCA P1..P3 | Đỏ / Vàng / Xanh |
+| DO5..DO7 LED nút | TCA P4..P6 | Cancel=DO5, Task 2=DO6, **Task 1=DO7** |
+| DO8 | TCA P7 | LED trạng thái AP |
 | W5500 SPI | GPIO12..16, GPIO39 | INT/MOSI/MISO/SCLK/CS/RESET |
-| On-board buzzer | GPIO46 | BSP PWM output |
+| Buzzer onboard | GPIO46 | PWM BSP |
+
+> **Nếu đấu lại dây board: CHỈ sửa `main/callbox_io.c`** — các module khác
+> tra cứu qua hàm `callbox_io_get_mapping()`.
 
 ### Power Supply
-- Input: 24VDC (for LEDs, tower light, buzzer)
-- Buck Converter: 24VDC → 5V/3.3V for ESP32
-- Protection: Polarity protection + fuse/resettable fuse
 
-## Message Examples
-
-### Button 1 Pressed (Call Task 1)
-```json
-{
-  "type": "call",
-  "task": 1,
-  "seq": 1042,
-  "ts": 1751791860
-}
-```
-
-### WCS Response - AGV Assigned
-```json
-{
-  "type": "assigned",
-  "task": 1,
-  "ref_seq": 1042,
-  "agv_id": "agv03",
-  "ts": 1751791865
-}
-```
-
-### Heartbeat/Status (Retained)
-```json
-{
-  "online": true,
-  "task1": "assigned",
-  "task2": "idle",
-  "uptime": 86214,
-  "fw": "1.0.0",
-  "ts": 1751791920
-}
-```
+- Input 24VDC (cho LED, tower, buzzer)
+- Buck converter 24V → 5V/3.3V cho ESP32
+- Bảo vệ: polar + fuse
 
 ## Troubleshooting
 
-### Connection Issues
-- Check WiFi SSID/password in config
-- Verify MQTT broker IP and port
-- Check firewall rules on broker
+| Triệu chứng | Cách xử lý |
+|-------------|-------------|
+| Không vào được portal | Kiểm tra AP `CALLBOX-<id>` (pass = SSID AP); IP `192.168.65.204` |
+| Mất nút bấm | Bấm nút nhưng không đèn — xem `idf.py monitor`, kiểm tra GPIO/pull-up |
+| MQTT không liên lạc | Thử: `mosquitto_sub -h <broker> -p 1884 -t "callbox/+/status"` |
+| LED không hoạt động | Kiểm tra 24V nguồn, đấu dây TCA9554, điện áp DO |
+| Task không về IDLE | WCS chưa gửi `completed` — sync lại qua `sync_request` |
+| AP bị tự tắt | STA ổn định > 30 s là chính sách bình thường; giữ Cancel 5 s để mở lại |
+| TLS lỗi cert | Cần SNTP thời gian thực trước (xem log `time_sync`) |
 
-### LED Not Responding
-- Verify GPIO configuration matches hardware
-- Check 24V power supply to LEDs
-- Verify transistor/relay circuits
+## Cấu trúc kho & công cụ
 
-### Button Not Detected
-- Confirm GPIO pins match hardware
-- Check pull-up resistor values
-- Increase debounce time if needed
-
-### MQTT Messages Not Received
-- Subscribe to test topic: `mosquitto_sub -h <broker> -t "callbox/+/status"`
-- Verify broker authentication
-- Check QoS settings
+```
+docs/                       # Tài liệu giao thức MQTT + phương án AGV (docx)
+tools/mqtt_broker_test.py   # python script kiểm thử broker/local
+build-win/                  # bản build cũ dùng Windows (có sdkconfig.old...)
+```
 
 ## References
 
-- [MQTT Protocol Specification](../Giao%20tiep%20MQTT%20TCP%20Bo%20goi%20WCS.docx)
-- [Hardware Design Document](../Phuong_an_Bo_goi_AGV_SEW_20260706.docx)
+- [Giao tiep MQTT TCP Bo goi WCS.docx](docs/Giao%20tiep%20MQTT%20TCP%20Bo%20goi%20WCS.docx)
+- [Phuong_an_Bo_goi_AGV_SEW_20260706.docx](docs/Phuong_an_Bo_goi_AGV_SEW_20260706.docx)
 - [ESP-IDF Documentation](https://docs.espressif.com/projects/esp-idf/en/latest/)
 
 ## License
 
-Internal AUBOT Project - SEWS Manufacturing Facility
+Internal AUBOT Project – SEWS Manufacturing Facility
