@@ -16,6 +16,14 @@
  * @note    Đây là buzzer *thụ động*: cần PWM ở tần số mong muốn để kêu
  *          (bsp_buzzer_set). Gọi bsp_buzzer_off() để tắt âm thanh.
  *
+ * @note    Khởi tạo buzzer (bsp_buzzer_init) là phần của bsp_board_init()
+ *          (bsp_board.h) — Application KHÔNG gọi trực tiếp.
+ *
+ * @note    PHÂN BIỆT LỖI:
+ *          - Chưa khởi tạo (BSP_BUZZER chưa sẵn sàng) → ESP_ERR_INVALID_STATE
+ *          - Đối số không hợp lệ (frequency_hz == 0, duty_percent > 100)
+ *            → ESP_ERR_INVALID_ARG
+ *
  * @author  TungLamAutomation <tunglam652004@gmail.com>
  * @version 1.0.0
  * @date    2026
@@ -32,8 +40,21 @@
 extern "C" {
 #endif
 
-esp_err_t bsp_buzzer_init(void);
+/**
+ * @brief Bật buzzer ở tần số và độ lớn âm thanh cho trước.
+ * @param frequency_hz  Tần số PWM (Hz); phải khác 0.
+ * @param duty_percent  Độ lớn âm thanh 0..100 (%).
+ * @return ESP_OK nếu PWM đã được đặt; ESP_ERR_INVALID_STATE nếu buzzer
+ *         chưa khởi tạo; ESP_ERR_INVALID_ARG nếu frequency_hz == 0 hoặc
+ *         duty_percent > 100; esp_err_t từ LEDC nếu driver lỗi.
+ */
 esp_err_t bsp_buzzer_set(uint32_t frequency_hz, uint8_t duty_percent);
+
+/**
+ * @brief Tắt buzzer (duty = 0).
+ * @return ESP_OK nếu thành công; ESP_ERR_INVALID_STATE nếu buzzer chưa
+ *         khởi tạo; esp_err_t từ LEDC nếu driver lỗi.
+ */
 esp_err_t bsp_buzzer_off(void);
 
 #ifdef __cplusplus

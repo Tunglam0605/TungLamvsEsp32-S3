@@ -18,19 +18,30 @@
  *
  * @see     bsp_board.h — API khởi tạo board
  * @see     bsp_i2c.h — bus I2C board (private)
+ * @see     bsp_internal.h — init private theo thành phần (DI/DO/buzzer)
  * @see     bsp_do.c / bsp_di.c / bsp_buzzer.c — các driver thành phần
  */
 #include "bsp_board.h"
-#include "bsp_buzzer.h"
-#include "bsp_di.h"
-#include "bsp_do.h"
 #include "bsp_i2c.h"
+#include "bsp_internal.h"
 #include "esp_log.h"
 
 static const char *TAG = "BSP_BOARD";
 
+/* Board initialized: TRUE chỉ khi DI + I2C + DO + buzzer đều thành công.
+ * Cho phép lần gọi bsp_board_init() thứ hai trả ESP_OK ngay (idempotent)
+ * mà KHÔNG đi xuống bsp_i2c_init() (vốn reject double-init). */
+static bool s_initialized = false;
+
 esp_err_t bsp_board_init(void)
 {
+    /* Idempotent: board đã fully initialized → không khởi tạo lại.
+     * Application vô tình gọi lần hai không phá I2C lifecycle (bsp_i2c_init
+     * double-call vốn trả ESP_ERR_INVALID_STATE). */
+    if (s_initialized) {
+        return ESP_OK;
+    }
+
     ESP_LOGI(TAG, "=== Waveshare ESP32-S3 8DI/8DO board init ===");
 
     /* BƯỚC 1 — Khởi tạo 8 đầu vào số (GPIO 4..11, pull-up, active-low). */
@@ -68,8 +79,17 @@ esp_err_t bsp_board_init(void)
     ret = bsp_buzzer_init();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "bsp_buzzer_init failed: %s", esp_err_to_name(ret));
-        return ret;   /* Buzzer lỗi: không nghiêm trọng bằng DI/DO, vẫn dừng báo lỗi */
+        /* Rollback buzzer bằng public deinit sẽ là overengineering cho
+         * Phase D (startup-lifecycle oriented, không có board_deinit).
+         * Cleanup tại chỗ chỉ gồm bsp_do_init đã tự xử lý phần device của
+         * nó; DI/I2C là board setup không rollback an toàn tại đây.
+         * Ghi chú: retry sau partial failure không được đảm bảo vì ESP-IDF
+         * resource cleanup không đầy đủ — không giả vờ hỗ trợ recovery. */
+        return ret;   /* Giữ primary error */
     }
+
+    /* Chỉ mark initialized sau khi MỌI thành phần thành công. */
+    s_initialized = true;
 
     ESP_LOGI(TAG, "Board initialized: 8DI + 8DO (TCA9554) + buzzer");
     return ESP_OK;

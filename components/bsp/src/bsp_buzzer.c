@@ -23,10 +23,12 @@
  *
  * @see     bsp_buzzer.h — API buzzer
  * @see     bsp_board.h — khởi tạo buzzer trong bsp_board_init()
+ * @see     bsp_internal.h — bsp_buzzer_init là init private (chỉ board gọi)
  */
 #include "bsp_buzzer.h"
+#include "bsp_internal.h"
 
-#include "driver/gpio.h"
+#include "driver/gpio.h"   /* GPIO_NUM_46 (macro chân buzzer) */
 #include "driver/ledc.h"
 #include "esp_log.h"
 
@@ -94,9 +96,13 @@ esp_err_t bsp_buzzer_init(void)
 
 esp_err_t bsp_buzzer_set(uint32_t frequency_hz, uint8_t duty_percent)
 {
-    /* Kiểm tra hợp lệ: điều kiện trước khi cho kêu.
-     * Nếu chưa init, tần số = 0 (không thể PWM), hoặc duty > 100% => bỏ qua. */
-    if (!s_initialized || frequency_hz == 0 || duty_percent > 100U) {
+    /* Phân biệt lỗi trạng thái và lỗi đối số (Phase D):
+     *   - chưa init               → ESP_ERR_INVALID_STATE (trạng thái)
+     *   - frequency == 0 / duty>100 → ESP_ERR_INVALID_ARG (đối số) */
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (frequency_hz == 0 || duty_percent > 100U) {
         return ESP_ERR_INVALID_ARG;
     }
 

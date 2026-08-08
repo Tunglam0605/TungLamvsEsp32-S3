@@ -20,8 +20,17 @@
  *          │ BSP_DI_8  │ GPIO 11  │
  *          └───────────┴──────────┘
  *
- * @note    Tất cả chân được cấu hình pull-up khi khởi tạo (bsp_di_init).
- *          Mức "active" = chân GPIO đọc LOW.
+ * @note    Tất cả chân được cấu hình pull-up khi khởi tạo (bsp_di_init —
+ *          private, chỉ bsp_board_init gọi). Mức "active" = chân GPIO đọc
+ *          LOW. Khởi tạo DI là phần của bsp_board_init() (bsp_board.h) —
+ *          Application KHÔNG gọi bsp_di_init trực tiếp.
+ *
+ * @note    TRƯỚC KHI INIT (BSP chưa khởi tạo):
+ *          - bsp_di_read(...)  → false (mọi kênh hợp lệ và cả kênh không
+ *            hợp lệ) — không input nào được xem là active khi phần cứng
+ *            chưa sẵn sàng.
+ *          - bsp_di_read_all()  → 0x00 — cùng ý nghĩa, an toàn để gọi
+ *            trước init mà không gây crash.
  *
  * @author  TungLamAutomation <tunglam652004@gmail.com>
  * @version 1.0.0
@@ -43,20 +52,16 @@ extern "C" {
 #endif
 
 /**
- * @brief Initialize the digital-input GPIOs (pull-up enabled).
- */
-esp_err_t bsp_di_init(void);
-
-/**
- * @brief Read the state of one input channel.
+ * @brief Đọc trạng thái một kênh đầu vào.
  * @param channel  BSP_DI_1 .. BSP_DI_8
- * @return true if the input is active (energized), false otherwise.
+ * @return true nếu đầu vào active (energized); false nếu không active,
+ *         kênh không hợp lệ, hoặc BSP_DI chưa được khởi tạo.
  */
 bool bsp_di_read(bsp_di_channel_t channel);
 
 /**
- * @brief Read all 8 inputs as a bitmask (bit0 = BSP_DI_1, bit7 = BSP_DI_8).
- * @return Bitmask of active inputs.
+ * @brief Đọc cả 8 đầu vào thành bitmask (bit0 = BSP_DI_1, bit7 = BSP_DI_8).
+ * @return Bitmask các đầu vào đang active; 0x00 nếu BSP_DI chưa khởi tạo.
  */
 uint8_t bsp_di_read_all(void);
 

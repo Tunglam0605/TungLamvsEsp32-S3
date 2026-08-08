@@ -16,6 +16,15 @@
  *          shadow bit = 0 = điện LOW = đầu ra KÍCH HOẠT (ON).
  *          Shadow khởi tạo 0xFF = tất cả OFF.
  *
+ * @note    GIAO DỊCH SHADOW (Phase D): mọi write tuân theo mô hình
+ *          candidate → hardware write → commit-on-success:
+ *            - candidate_shadow = s_out_shadow hiện tại
+ *            - sửa bit theo yêu cầu → ghi candidate xuống TCA9554
+ *            - CHỈ khi ESP_OK: s_out_shadow = candidate_shadow
+ *          Nếu I2C write thất bại, shadow GIỮ NGUYÊN — phần mềm không bao
+ *          giờ khẳng định trạng thái phần cứng chưa được xác nhận.
+ *          Toàn bộ chuỗi nằm trong CÙNG một critical section mutex.
+ *
  * @author  TungLamAutomation <tunglam652004@gmail.com>
  * @version 1.0.0
  * @date    2026
@@ -25,10 +34,9 @@
  * @see     tca9554.h — driver TCA9554 cấp thấp
  */
 #include "bsp_do.h"
-#include "bsp_board.h"
 #include "bsp_i2c.h"
+#include "bsp_internal.h"
 #include "tca9554.h"
-#include "driver/gpio.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -50,6 +58,10 @@ static const char *TAG = "BSP_DO";
 static tca9554_t s_expander;                 /* Instance TCA: chỉ handle device + timeout (zero-init static) */
 static uint8_t s_out_shadow = 0xFF;   /* 0xFF = tất cả inactive (active-low) */
 static SemaphoreHandle_t s_do_mutex = NULL;
+/* State initialized: TRUE chỉ khi toàn bộ init thành công (mutex + bus +
+ * TCA attach + OUTPUT 0xFF + CONFIG 0x00 + shadow 0xFF). Mọi init failure
+ * đều để FALSE. Runtime API guard dựa trên state này. */
+static bool s_initialized = false;
 
 /*
  * Dọn dọn khi init thất bại (chỉ dùng trong bsp_do_init).
@@ -78,10 +90,21 @@ static void bsp_do_cleanup_partial_init(void)
 
     /* 3) Reset trạng thái logic: luôn để về all-OFF an toàn. */
     s_out_shadow = 0xFF;
+
+    /* 4) State initialized phải FALSE trên mọi init failure — runtime API
+     * guard dựa vào state này để chặn truy cập device chưa attach. */
+    s_initialized = false;
 }
 
 esp_err_t bsp_do_init(void)
 {
+    /* Double-init: BSP_DO đã sẵn sàng → không khởi tạo lại (an toàn, không
+     * làm hỏng bus/TCA đang chạy). Giữ ESP_OK cho phép board init lặp lại
+     * sau khi thành công. */
+    if (s_initialized) {
+        return ESP_OK;
+    }
+
     s_do_mutex = xSemaphoreCreateMutex();
     if (s_do_mutex == NULL) {
         ESP_LOGE(TAG, "Failed to create DO mutex");
@@ -135,6 +158,10 @@ esp_err_t bsp_do_init(void)
     }
     s_out_shadow = 0xFF;   /* Đồng bộ shadow với phần cứng (tất cả OFF) */
 
+    /* Chỉ mark initialized sau khi MỌI bước thành công — mutex, bus I2C
+     * board, TCA attach, OUTPUT 0xFF, CONFIG 0x00, shadow 0xFF. */
+    s_initialized = true;
+
     ESP_LOGI(TAG, "Hardware outputs ready (TCA9554, all OFF)");
     return ESP_OK;
 }
@@ -146,38 +173,71 @@ esp_err_t bsp_do_write(bsp_do_channel_t channel, bool active)
         return ESP_ERR_INVALID_ARG;
     }
 
-    /* Cập nhật 1 bit trong shadow theo yêu cầu:
-     *   - active = true  → xóa bit  (0)   → đầu ra kích hoạt (logic 0)
-     *   - active = false → set bit  (1)   → đầu ra tắt (logic 1)
-     * Không ghi trực tiếp 1 kênh mà thay vào toàn bộ shadow bên dưới. */
+    /* Guard trạng thái: chưa initialized → không được xSemaphoreTake(NULL)
+     * hay giao dịch TCA trên device chưa attach. Guard xảy ra TRƯỚC mutex. */
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /* GIAO DỊCH SHADOW (Phase D):
+     *   1) candidate = shadow hiện tại (đọc từ critical section)
+     *   2) sửa 1 bit theo yêu cầu:
+     *        - active = true  → xóa bit (0)  → đầu ra kích hoạt (logic 0)
+     *        - active = false → set bit (1)  → đầu ra tắt (logic 1)
+     *   3) ghi CANDIDATE xuống TCA9554
+     *   4) CHỈ KHI ESP_OK: s_out_shadow = candidate (commit sau hardware
+     *      success). Write fail → shadow GIỮ NGUYÊN, trả lỗi I2C.
+     * Toàn bộ chuỗi nằm trong CÙNG critical section mutex. */
     if (xSemaphoreTake(s_do_mutex, pdMS_TO_TICKS(BSP_DO_MUTEX_TIMEOUT_MS)) != pdTRUE) {
         ESP_LOGW(TAG, "DO mutex timeout; skipping channel %d write", channel + 1);
         return ESP_ERR_TIMEOUT;
     }
-    if (active) s_out_shadow &= ~(1u << channel);
-    else s_out_shadow |= (1u << channel);
-    esp_err_t ret = tca9554_write_outputs(&s_expander, s_out_shadow);
+
+    uint8_t candidate = s_out_shadow;
+    if (active) candidate &= (uint8_t)~(1u << channel);
+    else candidate |= (uint8_t)(1u << channel);
+
+    esp_err_t ret = tca9554_write_outputs(&s_expander, candidate);
+    if (ret == ESP_OK) {
+        s_out_shadow = candidate;   /* Commit CHỈ sau hardware success */
+    }
     xSemaphoreGive(s_do_mutex);
     return ret;
 }
 
 esp_err_t bsp_do_write_mask(uint8_t active_mask)
 {
+    /* Guard trạng thái: chưa initialized → chặn trước mutex. */
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
     /* Đảo bitmask để ra shadow thực: bit set = active → xóa bit đó trong
-     * shadow (active-low). Ví dụ: active_mask=0b00000001 → shadow=0b11111110. */
+     * shadow (active-low). Ví dụ: active_mask=0b00000001 → shadow=0b11111110.
+     * Cùng nguyên tắc candidate → hardware → commit-on-success. */
     if (xSemaphoreTake(s_do_mutex, pdMS_TO_TICKS(BSP_DO_MUTEX_TIMEOUT_MS)) != pdTRUE) {
         ESP_LOGW(TAG, "DO mutex timeout; skipping mask write");
         return ESP_ERR_TIMEOUT;
     }
-    s_out_shadow = (uint8_t)(~active_mask);
-    esp_err_t ret = tca9554_write_outputs(&s_expander, s_out_shadow);
+
+    uint8_t candidate = (uint8_t)(~active_mask);
+    esp_err_t ret = tca9554_write_outputs(&s_expander, candidate);
+    if (ret == ESP_OK) {
+        s_out_shadow = candidate;   /* Commit CHỈ sau hardware success */
+    }
     xSemaphoreGive(s_do_mutex);
     return ret;
 }
 
 uint8_t bsp_do_get_shadow(void)
 {
-    /* Trả về trạng thái điện thực tế (0=ON, 1=OFF trên từng chân). */
+    /* Pre-init fallback an toàn: 0xFF = mọi đầu ra OFF (active-low) —
+     * không giao dịch I2C trên device chưa attach. */
+    if (!s_initialized) {
+        return 0xFF;
+    }
+
+    /* Trả về ảnh điện THÔ (0=ON, 1=OFF trên từng chân). */
     uint8_t shadow = s_out_shadow;
     if (s_do_mutex != NULL &&
         xSemaphoreTake(s_do_mutex, pdMS_TO_TICKS(BSP_DO_MUTEX_TIMEOUT_MS)) == pdTRUE) {
@@ -196,6 +256,7 @@ uint8_t bsp_do_get_active_mask(void)
 
 esp_err_t bsp_do_all_off(void)
 {
-    /* Viết tắt: tắt hết = ghi active_mask 0 (không đầu ra nào hoạt động). */
+    /* Viết tắt: tắt hết = ghi active_mask 0 (không đầu ra nào hoạt động).
+     * Tự thừa hưởng transaction semantics + guard pre-init của write_mask. */
     return bsp_do_write_mask(0x00);
 }
