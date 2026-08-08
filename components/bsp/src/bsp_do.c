@@ -60,11 +60,13 @@ static SemaphoreHandle_t s_do_mutex = NULL;
 /*
  * Dọn dẹp khi init thất bại (chỉ dùng trong bsp_do_init).
  * Thứ tự bắt buộc: detach TCA device → xóa I2C bus → xóa mutex.
- * Không được xóa bus trong khi device vẫn còn attach.
  *
- * - Nếu device detach fail: log lỗi, GIỮ nguyên device handle; không xóa
- *   bus (bus còn child device) → tránh state giả. Instance sẽ không được
- *   xem là "initialized".
+ * - Nếu device detach fail: log lỗi, GIỮ nguyên handle device (driver đã
+ *   đảm bảo); KHÔNG xóa bus (bus vẫn còn child device) → tránh state giả.
+ *   KHÔNG early-return: vẫn phải tiếp tục giải phóng mutex và reset shadow.
+ * - i2c_del_master_bus(): kiểm tra và log lỗi; chỉ NULL s_i2c_bus khi
+ *   delete thực sự thành công (ESP_OK).
+ * - Mutex luôn được xóa khi đã được tạo — không được leak.
  * - Primary error của caller luôn được giữ nguyên; lỗi cleanup chỉ log.
  */
 static void bsp_do_cleanup_partial_init(void)
@@ -73,24 +75,29 @@ static void bsp_do_cleanup_partial_init(void)
     if (s_expander.dev != NULL) {
         if (tca9554_deinit(&s_expander) != ESP_OK) {
             ESP_LOGE(TAG, "TCA device detach failed during init cleanup; "
-                          "bus kept (still has attached child)");
-            return;
+                          "keeping bus (child device still attached)");
+            /* KHÔNG return — tiếp tục dọn mutex và reset shadow. */
         }
     }
 
-    /* 2) I2C bus — chỉ xóa khi không còn child device. */
-    if (s_i2c_bus != NULL) {
-        i2c_del_master_bus(s_i2c_bus);
-        s_i2c_bus = NULL;
+    /* 2) I2C bus — chỉ xóa khi KHÔNG còn child device (dev đã detach thành
+       công hoặc chưa bao giờ attach; detach fail → giữ bus). */
+    if (s_expander.dev == NULL && s_i2c_bus != NULL) {
+        esp_err_t ret = i2c_del_master_bus(s_i2c_bus);
+        if (ret == ESP_OK) {
+            s_i2c_bus = NULL;   /* Chỉ NULL khi delete thực sự thành công. */
+        } else {
+            ESP_LOGE(TAG, "Failed to delete I2C bus: %s", esp_err_to_name(ret));
+        }
     }
 
-    /* 3) Mutex — không được leak nếu init thất bại sau khi tạo. */
+    /* 3) Mutex — không được leak khi init thất bại sau khi tạo. */
     if (s_do_mutex != NULL) {
         vSemaphoreDelete(s_do_mutex);
         s_do_mutex = NULL;
     }
 
-    /* 4) Reset trạng thái logic: luôn trỏ về all-OFF an toàn. */
+    /* 4) Reset trạng thái logic: luôn để về all-OFF an toàn. */
     s_out_shadow = 0xFF;
 }
 
