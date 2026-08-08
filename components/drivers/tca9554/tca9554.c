@@ -6,10 +6,11 @@
  *          Bản đồ thanh ghi là chi tiết triển khai và được giữ kín trong
  *          tệp này.
  *
- * @note    An toàn luồng: driver KHÔNG an toàn luồng. Nó giữ trạng thái
- *          instance (handle bus/device, địa chỉ, timeout) nhưng không tạo
- *          mutex. Người gọi chịu trách nhiệm tuần tự hóa mọi giao dịch I2C
- *          (ví dụ BSP_DO tuần tự hóa read-modify-write thanh ghi OUTPUT).
+ * @note    An toàn luồng: driver KHÔNG an toàn luồng. Instance chỉ giữ
+ *          device handle và transaction timeout (không giữ bus handle hay
+ *          địa chỉ) nhưng không tạo mutex. Người gọi chịu trách nhiệm tuần
+ *          tự hóa mọi giao dịch I2C (ví dụ BSP_DO tuần tự hóa
+ *          read-modify-write thanh ghi OUTPUT).
  *
  * @author  TungLamAutomation <tunglam652004@gmail.com>
  * @version 1.0.0
@@ -59,8 +60,14 @@ esp_err_t tca9554_init(tca9554_t *dev, const tca9554_config_t *config)
         return ESP_ERR_INVALID_ARG;
     }
 
+    /* Double init: instance đang active → không tự deinit/reinit.
+     * Ownership rule: INIT → USE → DEINIT → INIT lại nếu cần. */
+    if (dev->dev != NULL) {
+        ESP_LOGE(TAG, "TCA9554 already initialized (double init rejected)");
+        return ESP_ERR_INVALID_STATE;
+    }
+
     dev->timeout_ms = config->timeout_ms;
-    dev->dev = NULL;
 
     i2c_device_config_t device_cfg = {
         .dev_addr_length = I2C_ADDR_BIT_LEN_7,
@@ -84,10 +91,20 @@ esp_err_t tca9554_init(tca9554_t *dev, const tca9554_config_t *config)
 esp_err_t tca9554_deinit(tca9554_t *dev)
 {
     if (!dev) return ESP_ERR_INVALID_ARG;
-    if (dev->dev != NULL) {
-        i2c_master_bus_rm_device(dev->dev);
-        dev->dev = NULL;
+
+    /* Idempotent: instance chưa active (hoặc đã deinit) → coi như xong. */
+    if (dev->dev == NULL) return ESP_OK;
+
+    esp_err_t ret = i2c_master_bus_rm_device(dev->dev);
+    if (ret != ESP_OK) {
+        /* rm_device fail → GIỮ nguyên handle: driver phải phản ánh đúng
+         * trạng thái ownership, không giả vờ đã detach. */
+        ESP_LOGE(TAG, "Failed to remove TCA9554 device: %s", esp_err_to_name(ret));
+        return ret;
     }
+
+    /* Chỉ xóa handle khi hardware thật sự detach thành công. */
+    dev->dev = NULL;
     return ESP_OK;
 }
 

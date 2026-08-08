@@ -52,10 +52,47 @@ static const char *TAG = "BSP_DO";
 #define BSP_DO_EXPANDER_TIMEOUT_MS 100U
 #define BSP_DO_MUTEX_TIMEOUT_MS 50U
 
-static tca9554_t s_expander;                 /* Instance TCA: chỉ handle device + timeout */
+static tca9554_t s_expander;                 /* Instance TCA: chỉ handle device + timeout (zero-init static) */
 static i2c_master_bus_handle_t s_i2c_bus = NULL;  /* Bus I2C — BSP sở hữu (tạm thời đến Phase C) */
 static uint8_t s_out_shadow = 0xFF;   /* 0xFF = tất cả inactive (active-low) */
 static SemaphoreHandle_t s_do_mutex = NULL;
+
+/*
+ * Dọn dẹp khi init thất bại (chỉ dùng trong bsp_do_init).
+ * Thứ tự bắt buộc: detach TCA device → xóa I2C bus → xóa mutex.
+ * Không được xóa bus trong khi device vẫn còn attach.
+ *
+ * - Nếu device detach fail: log lỗi, GIỮ nguyên device handle; không xóa
+ *   bus (bus còn child device) → tránh state giả. Instance sẽ không được
+ *   xem là "initialized".
+ * - Primary error của caller luôn được giữ nguyên; lỗi cleanup chỉ log.
+ */
+static void bsp_do_cleanup_partial_init(void)
+{
+    /* 1) TCA device — detach trước (nếu còn active). */
+    if (s_expander.dev != NULL) {
+        if (tca9554_deinit(&s_expander) != ESP_OK) {
+            ESP_LOGE(TAG, "TCA device detach failed during init cleanup; "
+                          "bus kept (still has attached child)");
+            return;
+        }
+    }
+
+    /* 2) I2C bus — chỉ xóa khi không còn child device. */
+    if (s_i2c_bus != NULL) {
+        i2c_del_master_bus(s_i2c_bus);
+        s_i2c_bus = NULL;
+    }
+
+    /* 3) Mutex — không được leak nếu init thất bại sau khi tạo. */
+    if (s_do_mutex != NULL) {
+        vSemaphoreDelete(s_do_mutex);
+        s_do_mutex = NULL;
+    }
+
+    /* 4) Reset trạng thái logic: luôn trỏ về all-OFF an toàn. */
+    s_out_shadow = 0xFF;
+}
 
 esp_err_t bsp_do_init(void)
 {
@@ -84,6 +121,8 @@ esp_err_t bsp_do_init(void)
     esp_err_t ret = i2c_new_master_bus(&bus_cfg, &s_i2c_bus);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to create I2C bus: %s", esp_err_to_name(ret));
+        s_i2c_bus = NULL;                 /* Bus không tồn tại; mutex chưa dùng */
+        bsp_do_cleanup_partial_init();    /* Xóa mutex (nếu có) — không leak */
         return ret;
     }
 
@@ -98,37 +137,32 @@ esp_err_t bsp_do_init(void)
     ret = tca9554_init(&s_expander, &tca_cfg);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to init expander: %s", esp_err_to_name(ret));
-        i2c_del_master_bus(s_i2c_bus);
-        s_i2c_bus = NULL;
+        bsp_do_cleanup_partial_init();
         return ret;
     }
 
     /* BƯỚC 3 — Trình tự khởi tạo an toàn (không tạo output glitch):
      *   1) preset thanh ghi OUTPUT = 0xFF (mọi chân điện HIGH = đầu ra
      *      active-low đều OFF) — latch an toàn sẵn sàng TRƯỚC khi enable.
-     *   2) CONFIG = 0x00 (tất cả chân thành output) — thời điểm sau khi
-     *      latch đã chứa safe state, không output nào bị kích hoạt.
+     *   2) CONFIG = 0x00 (tất cả chân thành output) — latch đã chứa safe
+     *      state, không output nào bị kích hoạt.
      *   3) s_out_shadow = 0xFF đồng bộ với phần cứng.
      * Không đảo thứ tự này. */
-    ret = tca9554_write_outputs(&s_expander, 0xFF);
+    ret = tca9554_write_outputs(&s_expander, 0xFF);   /* preset OUTPUT latch */
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to preset OUTPUT safe: %s", esp_err_to_name(ret));
-        tca9554_deinit(&s_expander);
-        i2c_del_master_bus(s_i2c_bus);
-        s_i2c_bus = NULL;
+        bsp_do_cleanup_partial_init();
         return ret;
     }
-    ret = tca9554_set_all_outputs(&s_expander);   /* CONFIG = 0x00 */
+    ret = tca9554_set_all_outputs(&s_expander);       /* CONFIG = 0x00 */
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to enable outputs: %s", esp_err_to_name(ret));
-        tca9554_deinit(&s_expander);
-        i2c_del_master_bus(s_i2c_bus);
-        s_i2c_bus = NULL;
+        bsp_do_cleanup_partial_init();
         return ret;
     }
     s_out_shadow = 0xFF;   /* Đồng bộ shadow với phần cứng (tất cả OFF) */
 
-    ESP_LOGI(TAG, "Digital outputs ready (TCA9554, all OFF)");
+    ESP_LOGI(TAG, "Hardware outputs ready (TCA9554, all OFF)");
     return ESP_OK;
 }
 

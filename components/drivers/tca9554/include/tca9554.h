@@ -15,10 +15,11 @@
  *          không Waveshare, không CallBox, không enum kênh BSP, không ngữ
  *          nghĩa task/tower, không MQTT/WCS.
  *
- * @note    An toàn luồng: driver KHÔNG an toàn luồng. Nó giữ trạng thái
- *          instance (handle bus/device, địa chỉ, timeout, bộ đếm shadow)
- *          nhưng không tạo mutex. Người gọi chịu trách nhiệm tuần tự hóa
- *          mọi giao dịch I2C (ví dụ BSP_DO tuần tự hóa read-modify-write).
+ * @note    An toàn luồng: driver KHÔNG an toàn luồng. Instance chỉ giữ
+ *          device handle và transaction timeout (không giữ bus handle,
+ *          địa chỉ hay shadow state). Driver không tạo mutex; người gọi
+ *          chịu trách nhiệm tuần tự hóa mọi giao dịch I2C (ví dụ BSP_DO
+ *          tuần tự hóa read-modify-write).
  *
  * @author  TungLamAutomation <tunglam652004@gmail.com>
  * @version 1.0.0
@@ -72,11 +73,22 @@ typedef struct {
  * trạng thái đầu ra an toàn là policy của BOARD (caller), người gọi gọi
  * tca9554_set_all_outputs()/tca9554_write_outputs() sau đó nếu cần.
  *
- * Init trống → nếu có lỗi, dev->dev được đặt NULL (không half-init).
+ * Vòng đời bắt buộc (ownership rule):
+ *   INIT → USE → DEINIT → INIT lại nếu cần
+ * Không cho INIT hai lần liên tiếp: nếu dev->dev != NULL (instance đang
+ * active) → trả ESP_ERR_INVALID_STATE; KHÔNG tự deinit/reinit lại.
+ *
+ * Caller phải cung cấp instance đã zero-init trước khi gọi init lần đầu:
+ *   tca9554_t dev = {0};
+ * (hoặc khai báo static/global — storage tĩnh được zero-init sẵn).
+ * Không có constructor framework, không cấp phát động.
+ *
+ * Nếu add device thất bại → dev->dev = NULL (không half-init).
  *
  * @param dev      Handle cần được điền (vùng nhớ do người gọi cấp).
  * @param config   Bus, địa chỉ, clock và timeout; phải hợp lệ.
- * @return ESP_OK nếu thành công; esp_err_t nếu có lỗi.
+ * @return ESP_OK nếu thành công; ESP_ERR_INVALID_ARG nếu đối số sai;
+ *         ESP_ERR_INVALID_STATE nếu instance đang active (double init).
  */
 esp_err_t tca9554_init(tca9554_t *dev, const tca9554_config_t *config);
 
@@ -84,11 +96,16 @@ esp_err_t tca9554_init(tca9554_t *dev, const tca9554_config_t *config);
  * @brief Gỡ thiết bị ra khỏi bus I2C (i2c_master_bus_rm_device).
  *
  * Driver KHÔNG sở hữu bus I2C — bus do người gọi sở hữu, nên hàm này
- * không bao giờ gọi i2c_del_master_bus(). Sau khi gỡ, dev->dev = NULL
- * (instance có thể khởi tạo lại).
+ * không bao giờ gọi i2c_del_master_bus().
  *
- * @param dev  Instance đã init (hoặc dev rỗng → ESP_OK, an toàn gọi nhiều lần).
- * @return ESP_OK; lỗi nếu đối số không hợp lệ.
+ * - dev == NULL          → ESP_ERR_INVALID_ARG
+ * - dev->dev == NULL     → ESP_OK (idempotent, an toàn gọi nhiều lần)
+ * - rm_device SUCCESS    → dev->dev = NULL, ESP_OK
+ * - rm_device FAIL       → GIỮ NGUYÊN dev->dev, trả esp_err_t từ ESP-IDF
+ *                          (không giả vờ đã detach).
+ *
+ * @param dev  Instance đã init.
+ * @return ESP_OK nếu không còn device active; esp_err_t phù hợp nếu lỗi.
  */
 esp_err_t tca9554_deinit(tca9554_t *dev);
 
