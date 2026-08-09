@@ -79,6 +79,7 @@ static Config_t *s_config = NULL;
 static httpd_handle_t s_server = NULL;
 
 #define PORTAL_SCAN_MAX_RESULTS 32
+#define PORTAL_HTTP_BODY_TIMEOUTS_MAX 1
 /* Giữ các mảng lớn (kết quả quét/JSON/HTML) ở tầng tĩnh, KHÔNG nằm trong
  * stack của task HTTP server (ngăn stack overflow). */
 static platform_wifi_scan_record_t s_portal_scan_records[PORTAL_SCAN_MAX_RESULTS];
@@ -87,6 +88,33 @@ static char s_io_status_json[768];
 /* Trang cấu hình 1 tệp duy nhất nhúng CSS + markup monitor; bộ đệm đủ lớn
  * để stylesheet hoạt động không bao giờ bị cắt cụt. */
 static char s_page_html[40960];
+
+/* HTTP server has one request worker.  A half-sent POST must not wait
+ * forever, otherwise it delays every login and portal API request behind it. */
+static esp_err_t portal_receive_body(httpd_req_t *req, char *body, size_t body_size)
+{
+    if (!req || !body || req->content_len <= 0 || (size_t)req->content_len >= body_size) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    int received = 0;
+    int timeout_count = 0;
+    while (received < req->content_len) {
+        const int count = httpd_req_recv(req, body + received, req->content_len - received);
+        if (count == HTTPD_SOCK_ERR_TIMEOUT && ++timeout_count <= PORTAL_HTTP_BODY_TIMEOUTS_MAX) {
+            continue;
+        }
+        if (count <= 0) {
+            ESP_LOGW(TAG, "HTTP request body aborted after %d/%d byte(s)", received,
+                     req->content_len);
+            return count == HTTPD_SOCK_ERR_TIMEOUT ? ESP_ERR_TIMEOUT : ESP_FAIL;
+        }
+        received += count;
+        timeout_count = 0;
+    }
+    body[received] = '\0';
+    return ESP_OK;
+}
 
 /* Hạn phiên cấu hình (ms): nếu không tương tác quá lâu thì AP được phép tắt */
 static volatile TickType_t s_session_deadline;
@@ -439,10 +467,12 @@ static esp_err_t send_login_page(httpd_req_t *req, const char *error)
 static esp_err_t wifi_scan_handler(httpd_req_t *req)
 {
     if (!require_portal_access(req)) return ESP_OK;
-    /* Chỉ 1 bên quét một lúc: đợi tối đa 8 s để task nền nhả mutex */
-    if (!wifi_scan_lock(8000)) {
-        ESP_LOGW(TAG, "WiFi scan busy: background scan did not release the lock");
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "WiFi scan busy");
+    /* Never hold the sole HTTP worker waiting for a background scan. */
+    if (!wifi_scan_lock(0)) {
+        ESP_LOGW(TAG, "WiFi scan busy; portal remains responsive");
+        httpd_resp_set_status(req, "409 Conflict");
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_sendstr(req, "WiFi scan busy; try again shortly");
         return ESP_OK;
     }
 
@@ -453,20 +483,10 @@ static esp_err_t wifi_scan_handler(httpd_req_t *req)
     };
 
     uint16_t count = PORTAL_SCAN_MAX_RESULTS;
-    esp_err_t err = ESP_FAIL;
-    for (int attempt = 0; attempt < 12; attempt++) {
-        memset(s_portal_scan_records, 0, sizeof(s_portal_scan_records));
-        err = platform_wifi_scan(&scan_config, s_portal_scan_records, &count);
-        if (err != ESP_ERR_INVALID_STATE) {
-            /* Trình quản lý Wi-Fi là chủ sở hữu trạng thái kết nối. Không bao
-             * giờ ngắt STA vì một yêu cầu HTTP chỉ để quét thành công. */
-            if (err == ESP_OK) {
-                ESP_LOGI(TAG, "WiFi scan completed: %u network(s)", (unsigned)count);
-            }
-            break;
-        }
-        /* STA đang bận kết nối: thử lại sau 500 ms (tối đa ~6 s) */
-        vTaskDelay(pdMS_TO_TICKS(500));
+    memset(s_portal_scan_records, 0, sizeof(s_portal_scan_records));
+    const esp_err_t err = platform_wifi_scan(&scan_config, s_portal_scan_records, &count);
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "WiFi scan completed: %u network(s)", (unsigned)count);
     }
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "WiFi scan failed: %s", esp_err_to_name(err));
@@ -690,13 +710,10 @@ static esp_err_t wifi_profile_delete_handler(httpd_req_t *req)
         return ESP_OK;
     }
     char body[128] = { 0 };
-    int received = 0;
-    while (received < req->content_len) {
-        int count = httpd_req_recv(req, body + received, req->content_len - received);
-        if (count <= 0) return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Request read failed");
-        received += count;
+    if (portal_receive_body(req, body, sizeof(body)) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_408_REQ_TIMEOUT, "Request read timed out");
+        return ESP_OK;
     }
-    body[received] = '\0';
     char ssid[33] = { 0 };
     if (!form_value(body, "ssid", ssid, sizeof(ssid))) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "SSID is required");
@@ -1080,7 +1097,7 @@ static esp_err_t portal_page_handler_modern(httpd_req_t *req)
     static const char ethernet_status_style[] =
         "<style>.identity-status .ethernet-status{grid-column:1 / -1;border-right:0;background:rgba(52,211,153,.04)}@media(max-width:767px){.identity-status .ethernet-status{grid-column:auto}}</style>";
     static const char ethernet_status_script[] =
-        "<script>(function(){const live=document.querySelector('.live');if(!live)return;const item=document.createElement('div');item.className='live-item ethernet-status';item.innerHTML='<small>Ethernet / IP</small><b id=\"eth-state\">\u0110ang ki\u1ec3m tra...</b>';live.append(item);const refresh=async()=>{const e=document.getElementById('eth-state');if(!e)return;try{const x=await fetch('/api/status',{cache:'no-store'}).then(r=>{if(!r.ok)throw Error();return r.json()});e.textContent=x.eth?'\u0110\u00e3 k\u1ebft n\u1ed1i \u00b7 '+x.eth_ip:'Ch\u01b0a k\u1ebft n\u1ed1i';e.className=x.eth?'ok':'bad'}catch(_){e.textContent='Kh\u00f4ng \u0111\u1ecdc \u0111\u01b0\u1ee3c';e.className='bad'}};refresh();setInterval(refresh,3000)})();</script>";
+        "<script>(function(){const live=document.querySelector('.live');if(!live)return;const item=document.createElement('div');item.className='live-item ethernet-status';item.innerHTML='<small>Ethernet / IP</small><b id=\"eth-state\">\u0110ang ki\u1ec3m tra...</b>';live.append(item);const refresh=async()=>{const e=document.getElementById('eth-state');if(!e)return;try{const x=await fetch('/api/status',{cache:'no-store'}).then(r=>{if(!r.ok)throw Error();return r.json()});e.textContent=x.eth?'\u0110\u00e3 k\u1ebft n\u1ed1i \u00b7 '+x.eth_ip:'Ch\u01b0a k\u1ebft n\u1ed1i';e.className=x.eth?'ok':'bad'}catch(_){e.textContent='Kh\u00f4ng \u0111\u1ecdc \u0111\u01b0\u1ee3c';e.className='bad'}};refresh();setInterval(refresh,10000)})();</script>";
     static const char vertical_layout_style[] =
         "<style>.wifi-top{align-items:end}.wifi-top>.btn{align-self:end;margin-top:0}@media(min-width:1024px){.layout{grid-template-columns:1fr}.layout>.card:nth-child(1){grid-column:1;grid-row:1}.layout>.card:nth-child(2){grid-column:1;grid-row:2}.layout>.card:nth-child(3){grid-column:1;grid-row:3}}@media(max-width:767px){.wifi-top>.btn{align-self:stretch}}</style>";
     static const char identity_id_style[] =
@@ -1161,16 +1178,9 @@ static esp_err_t login_handler(httpd_req_t *req)
     }
 
     char body[256];
-    int received = 0;
-    while (received < req->content_len) {
-        const int count = httpd_req_recv(req, body + received, req->content_len - received);
-        if (count <= 0) {
-            if (count == HTTPD_SOCK_ERR_TIMEOUT) continue;
-            return send_login_page(req, "<p class='error'>Khong the doc du lieu dang nhap.</p>");
-        }
-        received += count;
+    if (portal_receive_body(req, body, sizeof(body)) != ESP_OK) {
+        return send_login_page(req, "<p class='error'>Het thoi gian doc du lieu dang nhap.</p>");
     }
-    body[received] = '\0';
 
     /* Trích username + password từ form; tách riêng 2 điều kiện để log rõ
      * phần nào sai (giúp kỹ thuật viên debug). */
@@ -1220,17 +1230,10 @@ static esp_err_t save_handler(httpd_req_t *req)
 
     /* Đọc toàn bộ thân form (Content-Length byte) vào body */
     char body[1024];
-    int received = 0;
-    while (received < req->content_len) {
-        int count = httpd_req_recv(req, body + received, req->content_len - received);
-        if (count <= 0) {
-            if (count == HTTPD_SOCK_ERR_TIMEOUT) continue;
-            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Request read failed");
-            return ESP_FAIL;
-        }
-        received += count;
+    if (portal_receive_body(req, body, sizeof(body)) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_408_REQ_TIMEOUT, "Request read timed out");
+        return ESP_OK;
     }
-    body[received] = '\0';
 
     /* Làm việc trên bản sao cấu hình; chỉ gắn vào *s_config khi lưu thành công */
     const Config_t previous = *s_config;
@@ -1406,6 +1409,8 @@ esp_err_t config_portal_start(Config_t *config)
     httpd_config_t server_config = HTTPD_DEFAULT_CONFIG();
     server_config.max_uri_handlers = 15;
     server_config.stack_size = 6144;
+    server_config.recv_wait_timeout = 2;
+    server_config.send_wait_timeout = 2;
 
     esp_err_t err = httpd_start(&s_server, &server_config);
     if (err != ESP_OK) {
