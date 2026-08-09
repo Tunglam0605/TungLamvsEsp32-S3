@@ -10,18 +10,29 @@
  *          SNTP vẫn trỏ vào buffer platform — không bao giờ trỏ vào bộ nhớ
  *          tạm của caller.
  *
+ *          ═══ HỢP ĐỒNG CHUỖI ═══
+ *          Mọi chuỗi phải FIT HOÀN TOÀN trong buffer nội bộ (tối đa
+ *          PLATFORM_TIME_SERVER_BUF_LEN - 1 ký tự). Chuỗi quá dài bị
+ *          REJECT với ESP_ERR_INVALID_ARG — không bao giờ cắt ngầm rồi
+ *          khởi động SNTP với giá trị méo.
+ *
+ *          ═══ HỢP ĐỒNG TIMEZONE ═══
+ *          timezone bắt buộc non-NULL và non-empty. Caller muốn UTC phải
+ *          truyền explicit POSIX TZ (vd. "UTC0"). Chuỗi rỗng bị reject.
+ *
  *          ═══ ĐỘC LẬP ═══
  *          Component này không include/bíết gì về: Config_t, g_config,
  *          queues.h, CallBox, MQTT, Wi-Fi, Ethernet, BSP, portal, business.
  *          SNTP tự retry khi mạng chưa lên — platform không cần biết transport.
  *
- *          ═══ LIFECYCLE ═══
+ *          ═══ LIFECYCLE (TRUTHFUL) ═══
  *          s_started = true CHỈ SAU KHI mọi bước (validate → copy → timezone
- *          → SNTP start) đã thành công. Nếu lỗi giữa chừng, state phản ánh
- *          đúng sự thật: không fake success.
+ *          → SNTP start) đã thành công. Ngay sau esp_sntp_stop(), s_started
+ *          chuyển false — service thực tế đã dừng, state phản ánh đúng sự
+ *          thật, không fake running state.
  *
  * @author  TungLamAutomation <tunglam652004@gmail.com>
- * @version 1.0.0
+ * @version 1.0.1
  * @date    2026
  */
 #include "platform_time.h"
@@ -30,12 +41,13 @@
 #include "esp_sntp.h"
 
 #include <stdlib.h>   /* setenv */
-#include <string.h>   /* strncpy */
+#include <string.h>   /* strlen, strncpy */
 #include <time.h>     /* tzset */
 
 static const char *TAG = "PLATFORM_TIME";
 
-/* Buffer tĩnh lâu dài: SNTP giữ con trỏ tới đây, không bao giờ trỏ ra ngoài. */
+/* Buffer tĩnh lâu dài: SNTP giữ con trỏ tới đây, không bao giờ trỏ ra ngoài.
+ * Chuỗi hợp lệ phải dài tối đa BUF_LEN - 1 ký tự (còn null terminator). */
 #define PLATFORM_TIME_SERVER_BUF_LEN 64U
 
 static char s_primary[PLATFORM_TIME_SERVER_BUF_LEN];
@@ -43,39 +55,58 @@ static char s_fallback[PLATFORM_TIME_SERVER_BUF_LEN];
 static char s_timezone[PLATFORM_TIME_SERVER_BUF_LEN];
 static bool s_started;
 
-/* Sao chép chuỗi an toàn vào buffer tĩnh của platform (luôn null-terminate). */
+/* Sao chép chuỗi an toàn vào buffer tĩnh của platform (luôn null-terminate).
+ * Caller phải validate length trước — hàm này không cắt ngầm. */
 static void platform_time_copy(char *dst, size_t dst_len, const char *src)
 {
     strncpy(dst, src, dst_len - 1U);
     dst[dst_len - 1U] = '\0';
 }
 
-static bool platform_time_config_valid(const platform_time_config_t *config)
+/* Validate toàn bộ cấu hình TRƯỚC khi chạm service:
+ *   - primary: bắt buộc non-NULL, non-empty, fit buffer
+ *   - fallback: optional (NULL/empty bỏ qua), nếu có phải fit buffer
+ *   - timezone: bắt buộc non-NULL, non-empty, fit buffer
+ * Không cắt ngầm chuỗi quá dài. */
+static esp_err_t platform_time_config_validate(const platform_time_config_t *config)
 {
     if (!config) {
-        return false;
+        return ESP_ERR_INVALID_ARG;
     }
     if (!config->primary_server || config->primary_server[0] == '\0') {
-        return false;
+        return ESP_ERR_INVALID_ARG;
     }
-    if (!config->timezone) {
-        return false;
+    if (strlen(config->primary_server) >= PLATFORM_TIME_SERVER_BUF_LEN) {
+        return ESP_ERR_INVALID_ARG;
     }
-    return true;
+    if (config->fallback_server &&
+        strlen(config->fallback_server) >= PLATFORM_TIME_SERVER_BUF_LEN) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!config->timezone || config->timezone[0] == '\0') {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (strlen(config->timezone) >= PLATFORM_TIME_SERVER_BUF_LEN) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    return ESP_OK;
 }
 
 static void platform_time_apply_timezone(const char *tz)
 {
-    /* Timezone là giá trị caller cung cấp (vd. "ICT-7"); platform chỉ áp dụng
-     * cơ chế hệ thống. TZ rỗng => giữ UTC, không đặt lại môi trường. */
-    if (tz[0] != '\0') {
-        setenv("TZ", tz, 1);
-        tzset();
-    }
+    /* Timezone là giá trị caller cung cấp (vd. "ICT-7" hoặc "UTC0"); platform
+     * chỉ áp dụng cơ chế hệ thống. Validation đã đảm bảo chuỗi non-empty. */
+    setenv("TZ", tz, 1);
+    tzset();
 }
 
 static esp_err_t platform_time_start(const platform_time_config_t *config)
 {
+    esp_err_t ret = platform_time_config_validate(config);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
     /* BƯỚC 1 — Copy mọi chuỗi vào buffer platform (caller config có thể là
      * bộ nhớ tạm: HTTP handler stack, Config_t local...). */
     platform_time_copy(s_primary, sizeof(s_primary), config->primary_server);
@@ -105,51 +136,34 @@ static esp_err_t platform_time_start(const platform_time_config_t *config)
     return ESP_OK;
 }
 
-static esp_err_t platform_time_init_unlocked(const platform_time_config_t *config)
-{
-    if (!platform_time_config_valid(config)) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    return platform_time_start(config);
-}
-
 esp_err_t platform_time_init(const platform_time_config_t *config)
 {
     /* Idempotent: đã start rồi thì gọi lại là no-op, không start SNTP 2 lần. */
     if (s_started) {
         return ESP_OK;
     }
-
-    esp_err_t ret = platform_time_init_unlocked(config);
-    if (ret == ESP_OK) {
-        s_started = true;   /* Đánh dấu CHỈ SAU khi mọi bước thành công. */
-    }
-    return ret;
+    return platform_time_start(config);
 }
 
 esp_err_t platform_time_reconfigure(const platform_time_config_t *config)
 {
-    if (!platform_time_config_valid(config)) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    if (s_started) {
-        /* Đang chạy: stop trước, sau đó copy config mới và start lại.
-         * Nếu start mới thất bại, s_started vẫn giữ true (SNTP stack đã được
-         * esp_sntp_init trước đó; lỗi ở đây thường do hết bộ nhớ mạng tạm thời,
-         * SNTP cũ đã dừng và caller có thể thử lại). */
-        esp_sntp_stop();
-        esp_err_t ret = platform_time_start(config);
-        if (ret == ESP_OK) {
-            s_started = true;
-        }
+    /* Validate TRƯỚC khi chạm service: config mới xấu thì không phá service
+     * đang chạy (không stop rồi mới trả lỗi). */
+    esp_err_t ret = platform_time_config_validate(config);
+    if (ret != ESP_OK) {
         return ret;
     }
 
-    /* Chưa từng start: behave như init. */
-    esp_err_t ret = platform_time_start(config);
+    if (s_started) {
+        /* Lifecycle truthful: ngay sau khi SNTP dừng, state về false —
+         * không giữ "đang chạy" ảo trong khoảng stop→start. */
+        esp_sntp_stop();
+        s_started = false;
+    }
+
+    ret = platform_time_start(config);
     if (ret == ESP_OK) {
-        s_started = true;
+        s_started = true;   /* Chỉ đánh dấu khi start thật sự thành công. */
     }
     return ret;
 }
