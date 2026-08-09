@@ -364,7 +364,7 @@ static bool request_from_local_ap(httpd_req_t *req)
            (ntohl(peer_ip) & 0xFFFFFF00UL) == 0xC0A84100UL;
 }
 
-/* Kiểm tra cookie đăng nhập STA còn hiệu lực:
+/* Kiểm tra cookie đăng nhập portal còn hiệu lực:
  *   - Token chưa hết hạn (s_auth_deadline) và đã được sinh.
  *   - Cookie HTTP có chứa chuỗi đúng 'cb_auth=<token>'. */
 static bool request_has_sta_login(httpd_req_t *req)
@@ -392,10 +392,10 @@ static bool request_has_sta_login(httpd_req_t *req)
            strncmp(value, s_auth_token, value_len) == 0;
 }
 
-/* Tổng hợp kiểm tra quyền: được phép nếu từ AP cấu hình HOẶC có cookie STA hợp lệ */
+/* Mọi đường vào portal, gồm cả AP cứu hộ và STA, đều cần cookie hợp lệ. */
 static bool request_is_authorized(httpd_req_t *req)
 {
-    return request_from_local_ap(req) || request_has_sta_login(req);
+    return request_has_sta_login(req);
 }
 
 /* Yêu cầu quyền truy cập portal cho 1 handler; nếu không có quyền thì trả
@@ -422,10 +422,10 @@ static esp_err_t send_login_page(httpd_req_t *req, const char *error)
              "padding:20px;background:#0d1525;color:#f8fafc;font:16px/1.5 system-ui,-apple-system,Segoe UI,Arial,sans-serif}"
              "main{width:min(420px,100%%);background:#172236;border:1px solid #3b4b64;border-radius:12px;padding:30px;box-shadow:0 18px 45px rgba(2,6,23,.3)}"
              "img{display:block;width:180px;max-height:42px;object-fit:contain;margin-bottom:25px}h1{font-size:23px;margin:0 0 6px}p{margin:0 0 22px;color:#a9b7ca}label{display:block;margin:14px 0 6px;color:#a9b7ca;font-size:13px;font-weight:650}input{width:100%%;min-height:46px;padding:9px 12px;border:1px solid #3b4b64;border-radius:8px;background:#111a2c;color:#f8fafc;font:inherit}input:focus-visible{outline:3px solid rgba(52,211,153,.18);border-color:#34d399}button{width:100%%;min-height:50px;margin-top:22px;border:1px solid #047857;border-radius:8px;background:#047857;color:#ecfdf5;font:650 15px inherit;cursor:pointer}button:hover{background:#065f46}.error{margin:0 0 12px;padding:9px 11px;border:1px solid #f87171;border-radius:8px;background:rgba(248,113,113,.1);color:#fecaca;font-size:14px}.hint{margin-top:18px;margin-bottom:0;font-size:13px;color:#8190a6}</style></head><body><main>"
-             "<img src='/logo.jpg?v=4' alt='AUBOT'><h1>&#x110;&#x103;ng nh&#x1EAD;p c&#x1EA5;u h&#xEC;nh</h1><p>Truy c&#x1EAD;p qua m&#x1EA1;ng nh&#xE0; m&#xE1;y c&#x1EA7;n x&#xE1;c th&#x1EF1;c.</p>%s"
+             "<img src='/logo.jpg?v=4' alt='AUBOT'><h1>&#x110;&#x103;ng nh&#x1EAD;p c&#x1EA5;u h&#xEC;nh</h1><p>Vui l&#xF2;ng x&#xE1;c th&#x1EF1;c tr&#x1B0;&#x1EDB;c khi c&#x1EA5;u h&#xEC;nh thi&#x1EBF;t b&#x1ECB;.</p>%s"
              "<form method='post' action='/login'><label for='username'>T&#xE0;i kho&#x1EA3;n</label><input id='username' name='username' autocomplete='username' required autofocus>"
              "<label for='password'>M&#x1EAD;t kh&#x1EA9;u</label><input id='password' name='password' type='password' autocomplete='current-password' required>"
-             "<button type='submit'>&#x110;&#x103;ng nh&#x1EAD;p</button></form><p class='hint'>K&#x1EBF;t n&#x1ED1;i WiFi local c&#x1EE7;a Callbox kh&#xF4;ng c&#x1EA7;n &#x0111;&#x103;ng nh&#x1EAD;p.</p></main></body></html>",
+             "<button type='submit'>&#x110;&#x103;ng nh&#x1EAD;p</button></form></main></body></html>",
              message);
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
@@ -1125,8 +1125,8 @@ static esp_err_t portal_page_handler_modern(httpd_req_t *req)
     return httpd_resp_send(req, s_page_html, HTTPD_RESP_USE_STRLEN);
 }
 
-/* GET / — trang chính: nếu chưa đăng nhập (không từ AP) → trang đăng nhập;
- * ngược lại mở phiên cấu hình và trả trang cấu hình hiện đại. */
+/* GET / — mọi client chưa đăng nhập nhận trang login; client có cookie hợp lệ
+ * được mở phiên cấu hình và nhận giao diện hiện đại. */
 static esp_err_t root_handler(httpd_req_t *req)
 {
     if (!request_is_authorized(req)) return send_login_page(req, NULL);
@@ -1136,7 +1136,7 @@ static esp_err_t root_handler(httpd_req_t *req)
     return portal_page_handler_modern(req);
 }
 
-/* POST /login — xử lý đăng nhập từ mạng STA: đọc thân form (username,
+/* POST /login — xử lý đăng nhập portal: đọc thân form (username,
  * password), kiểm tra với admin/web_password, sinh token ngẫu nhiên và
  * gắn cookie 'cb_auth' hết hạn 30 phút, sau đó redirect về /. */
 static esp_err_t login_handler(httpd_req_t *req)
