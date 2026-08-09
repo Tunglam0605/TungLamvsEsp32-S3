@@ -16,14 +16,17 @@
  *          này CHỈ theo dõi trạng thái Wi-Fi. AP tự bật lại khi mất STA —
  *          đây là đường khôi phục của Portal. Các hàm wifi_scan_lock/unlock
  *          dùng chung việc quét giữa portal và trình chọn profile nền.
+ *          Provider ESP-IDF Wi-Fi (driver, netif, event handler) nằm ở
+ *          platform_wifi — module này chỉ giữ policy của product.
  *
  * @author  TungLamAutomation <tunglam652004@gmail.com>
- * @version 1.1.0
+ * @version 1.2.0
  * @date    2026
  *
  * @see     config_portal.h — web cấu hình trên AP
  * @see     callbox_config_store.h — lưu profile Wi-Fi
  * @see     network_link.h — aggregator uplink (Wi-Fi OR Ethernet)
+ * @see     platform_wifi.h — provider ESP-IDF Wi-Fi
  */
 #ifndef _WIFI_INIT_H_
 #define _WIFI_INIT_H_
