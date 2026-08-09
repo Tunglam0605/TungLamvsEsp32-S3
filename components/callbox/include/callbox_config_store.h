@@ -23,12 +23,12 @@
  * @date    2026
  *
  * @see     platform_nvs.h — generic NVS provider
- * @see     queues.h — Config_t
+ * @see     callbox_config.h — Config_t
  */
 #ifndef CALLBOX_CONFIG_STORE_H
 #define CALLBOX_CONFIG_STORE_H
 
-#include "queues.h"
+#include "callbox_config.h"
 #include "esp_err.h"
 #include <stdbool.h>
 #include <stddef.h>
