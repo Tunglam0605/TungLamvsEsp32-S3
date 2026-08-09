@@ -11,6 +11,8 @@ idf_component_register(SRCS "src/protocol_types.c"
                              "src/io_debug.c"
                              "src/led_control.c"
                              "src/output_renderer.c"
+                             "src/wifi_init.c"
+                             "src/network_link.c"
                     INCLUDE_DIRS "include"
                     PRIV_INCLUDE_DIRS "private_include"
-                    REQUIRES freertos platform_nvs bsp esp_timer)
+                    REQUIRES freertos platform_nvs bsp esp_timer platform_wifi)
