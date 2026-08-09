@@ -7,10 +7,18 @@
 #include "bsp_do.h"
 #include "callbox_io.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
 
 static const char *TAG = "LED_CONTROL";
+
+/* Queue lệnh buzzer nghiệp vụ — thuộc sở hữu riêng của led_control, không
+ * còn là biến toàn cục của app_main. Độ sâu giữ nguyên 10 như baseline. */
+static QueueHandle_t s_buzzer_queue = NULL;
+
+#define BUZZER_QUEUE_DEPTH 10
+
 static LEDState_t s_button_state[3] = { LED_OFF, LED_OFF, LED_OFF };
 static bool s_button_phase[3];
 static TickType_t s_button_last_toggle[3];
@@ -51,7 +59,7 @@ static void buzzer_task(void *arg)
 {
     (void)arg;
     BuzzerCmd_t command;
-    while (xQueueReceive(buzzer_queue, &command, portMAX_DELAY) == pdTRUE) {
+    while (xQueueReceive(s_buzzer_queue, &command, portMAX_DELAY) == pdTRUE) {
         for (int i = 0; i < command.beep_count; ++i) {
             do_write(callbox_io_get_mapping()->buzzer, true);
             vTaskDelay(pdMS_TO_TICKS(command.duration_ms));
@@ -61,9 +69,24 @@ static void buzzer_task(void *arg)
     }
 }
 
+esp_err_t led_control_prepare(void)
+{
+    /* Idempotent: nếu queue đã tồn tại (đã gọi lần đầu) thì không tạo lại.
+     * Chỉ tạo queue lệnh buzzer nghiệp vụ — không tạo task, không chạm BSP,
+     * không ghi phần cứng. Thất bại cấp phát trả ESP_ERR_NO_MEM để app_main
+     * dừng boot tại cùng điểm chết như baseline (trước bsp_board_init). */
+    if (s_buzzer_queue) return ESP_OK;
+    s_buzzer_queue = xQueueCreate(BUZZER_QUEUE_DEPTH, sizeof(BuzzerCmd_t));
+    if (!s_buzzer_queue) {
+        ESP_LOGE(TAG, "Failed to create buzzer queue");
+        return ESP_ERR_NO_MEM;
+    }
+    return ESP_OK;
+}
+
 void led_control_init(void)
 {
-    if (buzzer_queue && xTaskCreate(buzzer_task, "buzzer_task", 2048, NULL, 6, NULL) == pdPASS) {
+    if (s_buzzer_queue && xTaskCreate(buzzer_task, "buzzer_task", 2048, NULL, 6, NULL) == pdPASS) {
         ESP_LOGI(TAG, "Output primitives ready via BSP");
     } else {
         ESP_LOGE(TAG, "Buzzer queue/task unavailable");
@@ -130,9 +153,9 @@ void set_tower_light(int color, LEDState_t state)
 
 void buzzer_beep(int beep_count, int duration_ms)
 {
-    if (!buzzer_queue || beep_count <= 0 || duration_ms <= 0) return;
+    if (!s_buzzer_queue || beep_count <= 0 || duration_ms <= 0) return;
     const BuzzerCmd_t command = { .beep_count = beep_count, .duration_ms = duration_ms };
-    if (xQueueSend(buzzer_queue, &command, 0) != pdTRUE) {
+    if (xQueueSend(s_buzzer_queue, &command, 0) != pdTRUE) {
         ESP_LOGW(TAG, "Buzzer queue full; feedback skipped");
     }
 }

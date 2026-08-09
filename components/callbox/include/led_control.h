@@ -7,7 +7,7 @@
 #define CALLBOX_LED_CONTROL_H
 
 #include <stdint.h>
-#include "queues.h"
+#include "esp_err.h"
 
 typedef enum {
     LED_OFF = 0,
@@ -22,6 +22,11 @@ typedef struct {
     int beep_count;
     int duration_ms;
 } BuzzerCmd_t;
+
+/* Chuẩn bị queue lệnh buzzer nghiệp vụ (chủ sở hữu: led_control). Phải gọi
+ * TRƯỚC bsp_board_init() — nếu cấp phát thất bại, boot dừng ngay ở cùng
+ * điểm chết như khi app_main tự tạo queue. */
+esp_err_t led_control_prepare(void);
 
 void led_control_init(void);
 void set_button_led(int button_id, LEDState_t state);

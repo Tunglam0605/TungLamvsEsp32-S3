@@ -64,9 +64,6 @@
 
 static const char *TAG = "MAIN";
 
-/* Queue toàn cục: LED command và buzzer command (định nghĩa ở led_control.h) */
-QueueHandle_t buzzer_queue = NULL;
-
 /* Cấu hình tổng (toàn cục) — factory defaults dùng chung mọi thiết bị;
  * ID và mọi cài đặt có thể sửa qua portal. */
 Config_t g_config = {
@@ -217,13 +214,12 @@ void app_main(void)
         return;
     }
 
-    /* Bước 3: tạo 2 queue cho LED và buzzer — các task sẽ gửi lệnh điều
-     * khiển phần cứng qua đây (bộ đệm đến 20 đối tượng LED, 10 buzzer) */
-    buzzer_queue = xQueueCreate(10, sizeof(BuzzerCmd_t));
-
-    /* Nếu queue không tạo được → dừng ngay (phần cứng không điều khiển nổi) */
-    if (!buzzer_queue) {
-        ESP_LOGE(TAG, "Failed to create queues");
+    /* Bước 3: chuẩn bị queue lệnh buzzer nghiệp vụ (chủ sở hữu: led_control).
+     * Nếu cấp phát thất bại → dừng ngay trước bsp_board_init(), cùng điểm
+     * chết như baseline khi app_main tự tạo queue. */
+    ret = led_control_prepare();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to create buzzer queue: %s", esp_err_to_name(ret));
         return;
     }
 

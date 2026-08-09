@@ -6,6 +6,11 @@ idf_component_register(SRCS "src/protocol_types.c"
                              "src/sequence_service.c"
                              "src/sequence_store.c"
                              "src/nvs_storage.c"
+                             "src/callbox_io.c"
+                             "src/io_handler.c"
+                             "src/io_debug.c"
+                             "src/led_control.c"
+                             "src/output_renderer.c"
                     INCLUDE_DIRS "include"
                     PRIV_INCLUDE_DIRS "private_include"
-                    REQUIRES freertos platform_nvs)
+                    REQUIRES freertos platform_nvs bsp esp_timer)

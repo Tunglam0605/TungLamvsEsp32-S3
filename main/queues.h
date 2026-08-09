@@ -8,17 +8,14 @@
  *
  *     components/callbox/include/callbox_config.h
  *
- * Header này CHỈ còn khai báo runtime globals g_config / buzzer_queue.
+ * Queue lệnh buzzer nghiệp vụ đã chuyển quyền sở hữu sang led_control
+ * (component callbox) từ phase F.3 — header này CHỈ còn khai báo g_config.
  */
 #ifndef CALLBOX_QUEUES_H
 #define CALLBOX_QUEUES_H
 
 #include "callbox_config.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/queue.h"
 
-/* Tải trọng lệnh buzzer được định nghĩa bởi led_control.h. */
-extern QueueHandle_t buzzer_queue;
 extern Config_t g_config;
 
 #endif /* CALLBOX_QUEUES_H */
