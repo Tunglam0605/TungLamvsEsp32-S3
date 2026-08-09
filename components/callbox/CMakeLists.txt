@@ -16,7 +16,11 @@ idf_component_register(SRCS "src/protocol_types.c"
                              "src/mqtt_client.c"
                              "src/time_sync.c"
                              "src/state_machine.c"
+                             "src/config_portal.c"
+                             "src/network_status_task.c"
                     INCLUDE_DIRS "include"
                     PRIV_INCLUDE_DIRS "private_include"
+                    EMBED_FILES "company-logo-transparent.png"
                     REQUIRES freertos platform_nvs bsp esp_timer platform_wifi
-                             mqtt mbedtls platform_time)
+                             mqtt mbedtls platform_time esp_http_server
+                             esp_netif lwip esp_system)

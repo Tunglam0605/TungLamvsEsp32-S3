@@ -55,7 +55,7 @@ TungLamvsEsp32-S3/                # Thư mục gốc dự án
 │   ├── io_debug.c/h              # Tiện ích I/O cho portal /api/io-status
 │   └── led_control.c/h           # Buzzer LED queue, hiệu ứng blink
 ├── components/bsp/               # Board Support Package (nút, DO, 8DI, buzzer)
-├── img/company-logo-transparent.png   # Logo nhúng cho trang portal
+├── components/callbox/company-logo-transparent.png  # Logo nhúng cho trang portal
 ├── partitions.csv                # factory 2 MB (NVS 24 KB + phy 4 KB)
 └── tools/mqtt_broker_test.py     # Script kiểm thử MQTT cho broker
 ```
