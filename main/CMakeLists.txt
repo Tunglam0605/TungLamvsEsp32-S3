@@ -1,4 +1,4 @@
-idf_component_register(SRCS "output_renderer.c" "protocol_types.c" "app_event_queue.c" "callbox_sews.c"
+idf_component_register(SRCS "network_link.c" "output_renderer.c" "protocol_types.c" "app_event_queue.c" "callbox_sews.c"
                              "callbox_io.c"
                              "app_event_queue.c"
                              "button_gate.c"

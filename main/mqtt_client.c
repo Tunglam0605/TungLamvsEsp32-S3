@@ -14,6 +14,7 @@
 #include "esp_timer.h"
 #include "mqtt_client.h"
 #include "app_event_queue.h"
+#include "network_link.h"
 #include "protocol_types.h"
 #include "state_machine.h"
 #include "wifi_init.h"
@@ -220,7 +221,7 @@ void mqtt_client_subscribe_cmd(void)
 
 void mqtt_client_connect(void)
 {
-    if (!s_client_mutex || !network_is_connected() ||
+    if (!s_client_mutex || !network_link_is_connected() ||
         !g_config.mqtt_broker[0] || g_config.mqtt_port == 0) {
         return;
     }
@@ -374,7 +375,7 @@ void mqtt_communication_task(void *pvParameters)
 
     while (true) {
         const uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
-        if (network_is_connected() && !s_client_started && now_ms - last_start_ms >= 5000U) {
+        if (network_link_is_connected() && !s_client_started && now_ms - last_start_ms >= 5000U) {
             last_start_ms = now_ms;
             mqtt_client_connect();
         }

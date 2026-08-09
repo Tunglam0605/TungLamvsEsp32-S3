@@ -7,29 +7,28 @@
  *          thoại (portal web tại CALLBOX_AP_IP_ADDR).
  *
  *          ═══ SOFTAP ═══
- *          SSID:   CALLBOX-<id>     (đặt qua wifi_init_sta_profiles)
- *          Mật khẩu: trùng SSID AP (ví dụ CALLBOX-02)
+ *          SSID:   CALLBOX-<id>-<MAC6>   (3 byte cuối MAC nhà máy, hex hoa;
+ *                                          ví dụ CALLBOX-001-A1B2C3)
+ *          Mật khẩu: CALLBOX-<id>        (ví dụ CALLBOX-001)
  *          IP:     192.168.65.204/24  (CALLBOX_AP_IP_ADDR)
  *
- * @note    network_is_connected() = STA có IP Hoặc W5500 Ethernet có IP.
- *          AP tự bật lại khi mất STA — đây là đường khôi phục của Portal.
- *          Các hàm wifi_scan_lock/unlock dùng chung việc quét giữa portal
- *          và trình chọn profile nền.
+ * @note    Uplink overall (Wi-Fi HOẶC Ethernet) nằm ở network_link — module
+ *          này CHỈ theo dõi trạng thái Wi-Fi. AP tự bật lại khi mất STA —
+ *          đây là đường khôi phục của Portal. Các hàm wifi_scan_lock/unlock
+ *          dùng chung việc quét giữa portal và trình chọn profile nền.
  *
  * @author  TungLamAutomation <tunglam652004@gmail.com>
- * @version 1.0.0
+ * @version 1.1.0
  * @date    2026
  *
  * @see     config_portal.h — web cấu hình trên AP
  * @see     callbox_config_store.h — lưu profile Wi-Fi
- * @see     mqtt_client.c — phụ thuộc vào network_is_connected()
+ * @see     network_link.h — aggregator uplink (Wi-Fi OR Ethernet)
  */
 #ifndef _WIFI_INIT_H_
 #define _WIFI_INIT_H_
 
-#include "esp_event.h"
 #include "esp_err.h"
-#include "esp_wifi.h"
 #include "queues.h"
 
 /* Địa chỉ cố định của SoftAP khôi phục/cấu hình cục bộ. */
@@ -68,12 +67,6 @@ esp_err_t wifi_apply_config(const Config_t *config);
 void wifi_set_config_ap_callback(wifi_config_ap_callback_t callback);
 
 /**
- * @brief Xử lý sự kiện Wi-Fi
- */
-void wifi_event_handler(void *arg, esp_event_base_t event_base,
-                       int32_t event_id, void *event_data);
-
-/**
  * @brief Kiểm tra Wi-Fi đã kết nối chưa
  * @return 1 nếu đã kết nối, 0 nếu chưa
  */
@@ -81,9 +74,6 @@ uint8_t wifi_is_connected(void);
 
 /** Chụp nhanh danh tính STA hiện tại và thông tin IPv4 cho UI chẩn đoán. */
 void wifi_get_sta_status(wifi_sta_status_t *status);
-
-/** True khi station Wi-Fi hoặc W5500 Ethernet có địa chỉ IP. */
-uint8_t network_is_connected(void);
 
 /** Tuần tự hóa quét Wi-Fi giữa portal và trình chọn profile nền. */
 bool wifi_scan_lock(uint32_t timeout_ms);

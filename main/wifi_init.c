@@ -16,24 +16,28 @@
  *          Sự kiện: STA_GOT_IP → s_wifi_connected=1 (bit WIFI_CONNECTED_BIT);
  *          STA_DISCONNECTED → bật lại AP (đường khôi phục) + tự retry.
  *
- * @note    network_is_connected() = STA có IP HOẶC W5500 Ethernet có IP.
- *          Các hàm wifi_scan_lock/unlock đồng bộ việc quét giữa portal
+ *          ═══ BOUNDARY (SAU PHASE E.3) ═══
+ *          Module này CHỈ biết Wi-Fi — không include bsp_eth.h, không quyết
+ *          định trạng thái Ethernet. Aggregator uplink (Wi-Fi OR Ethernet)
+ *          nằm ở network_link.
+ *
+ * @note    Các hàm wifi_scan_lock/unlock đồng bộ việc quét giữa portal
  *          và trình chọn profile nền (chỉ 1 bên quét một lúc).
  *
  * @author  TungLamAutomation <tunglam652004@gmail.com>
- * @version 1.0.0
+ * @version 1.1.0
  * @date    2026
  *
  * @see     wifi_init.h — API
  * @see     config_portal.c — dùng wifi_scan_lock + status
  * @see     network_status_task.c — đọc trạng thái STA/AP
+ * @see     network_link.c — aggregator uplink Wi-Fi OR Ethernet
  */
 #include "wifi_init.h"
 
 #include <stdio.h>
 #include <string.h>
 
-#include "bsp_eth.h"
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
@@ -282,8 +286,9 @@ static void connect_to_best_known_network(void *arg)
     }
 }
 
-/* Sự kiện Wi-Fi: cập nhật cờ trạng thái, bật lại AP khi mất STA, retry */
-void wifi_event_handler(void *arg, esp_event_base_t event_base,
+/* Sự kiện Wi-Fi: cập nhật cờ trạng thái, bật lại AP khi mất STA, retry.
+ * Private — chỉ được đăng ký nội bộ trong module này. */
+static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                        int32_t event_id, void *event_data)
 {
     (void)arg;
@@ -512,12 +517,6 @@ void wifi_get_sta_status(wifi_sta_status_t *status)
         esp_ip4addr_ntoa(&ip_info.ip, status->ip, sizeof(status->ip));
         esp_ip4addr_ntoa(&ip_info.gw, status->gateway, sizeof(status->gateway));
     }
-}
-
-uint8_t network_is_connected(void)
-{
-    /* Kết nối mạng = STA Wi-Fi HOẶC W5500 Ethernet có IP */
-    return s_wifi_connected || bsp_eth_is_connected();
 }
 
 bool wifi_ap_is_active(void)

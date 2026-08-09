@@ -5,6 +5,7 @@
 #include "callbox_mqtt.h"
 #include "io_handler.h"
 #include "output_renderer.h"
+#include "network_link.h"
 #include "network_status_task.h"
 #include "sequence_service.h"
 #include "status.h"
@@ -81,7 +82,7 @@ static bool task_cancelable(int task_id)
 
 static void request_call(int task_id, uint32_t timestamp)
 {
-    if (status.CommState != COMM_READY || !network_is_connected() || !mqtt_is_connected() || status.Cancel.pending ||
+    if (status.CommState != COMM_READY || !network_link_is_connected() || !mqtt_is_connected() || status.Cancel.pending ||
         get_task_state(task_id) != TASK_IDLE || status.Call[task_id - 1].pending) {
         ESP_LOGI(TAG, "CALL task %d rejected by admission conditions", task_id);
         return;
@@ -99,7 +100,7 @@ static void request_call(int task_id, uint32_t timestamp)
 static void request_cancel(uint32_t timestamp)
 {
     if (status.CommState != COMM_READY || status.Cancel.pending ||
-        !network_is_connected() || !mqtt_is_connected()) return;
+        !network_link_is_connected() || !mqtt_is_connected()) return;
     int target = 0;
     for (int task = 1; task <= 2; ++task) {
         if (task_cancelable(task) && (!target || status.CallSequence[task - 1] > status.CallSequence[target - 1])) {
@@ -323,7 +324,7 @@ static void tick_transactions(void)
             status_request_feedback(OUTPUT_FEEDBACK_TRANSACTION_FAILED);
         } else if (call->retry_count < MISSION_MAX_RETRIES &&
                    time_reached(now_ms, call->retry_at_ms) &&
-                   network_is_connected() && mqtt_is_connected()) {
+                   network_link_is_connected() && mqtt_is_connected()) {
             /* Truyền lại cũng là một giao dịch: không bao giờ tiêu thụ seq
              * mới. */
             mqtt_publish_call(task, call->seq, call->timestamp);
@@ -342,7 +343,7 @@ static void tick_transactions(void)
         status_request_feedback(OUTPUT_FEEDBACK_TRANSACTION_FAILED);
     } else if (cancel->retry_count < MISSION_MAX_RETRIES &&
                time_reached(now_ms, cancel->retry_at_ms) &&
-               network_is_connected() && mqtt_is_connected()) {
+               network_link_is_connected() && mqtt_is_connected()) {
         mqtt_publish_cancel(status.CancelTarget, cancel->seq, cancel->timestamp);
         status_note_cancel_retry(now_ms + MISSION_RETRY_INTERVAL_MS);
         ESP_LOGW(TAG, "CANCEL retry task %u seq=%lu attempt=%u", status.CancelTarget,
