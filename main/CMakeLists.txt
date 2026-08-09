@@ -19,6 +19,6 @@ idf_component_register(SRCS "network_link.c" "output_renderer.c" "protocol_types
                              "nvs_storage.c"
                     INCLUDE_DIRS "."
                     EMBED_FILES "../img/company-logo-transparent.png"
-                    REQUIRES freertos esp_wifi esp_netif esp_event esp_timer
+                    REQUIRES freertos esp_netif esp_event esp_timer
                              bsp esp_http_server mqtt mbedtls lwip platform_time
                              platform_nvs platform_wifi)

@@ -56,7 +56,6 @@
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_system.h"
-#include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "lwip/inet.h"
@@ -65,6 +64,7 @@
 #include "io_debug.h"
 #include "callbox_mqtt.h"
 #include "callbox_config_store.h"
+#include "platform_wifi.h"
 #include "status.h"
 #include "time_sync.h"
 #include "wifi_init.h"
@@ -80,7 +80,7 @@ static httpd_handle_t s_server = NULL;
 #define PORTAL_SCAN_MAX_RESULTS 32
 /* Giữ các mảng lớn (kết quả quét/JSON/HTML) ở tầng tĩnh, KHÔNG nằm trong
  * stack của task HTTP server (ngăn stack overflow). */
-static wifi_ap_record_t s_portal_scan_records[PORTAL_SCAN_MAX_RESULTS];
+static platform_wifi_scan_record_t s_portal_scan_records[PORTAL_SCAN_MAX_RESULTS];
 static char s_portal_scan_json[4096];
 static char s_io_status_json[768];
 /* Trang cấu hình 1 tệp duy nhất nhúng CSS + markup monitor; bộ đệm đủ lớn
@@ -433,7 +433,8 @@ static esp_err_t send_login_page(httpd_req_t *req, const char *error)
 }
 
 /* GET /api/wifi-scan — quét WiFi và trả danh sách mạng dạng JSON.
- * Sử dụng wifi_scan_lock/unlock để đồng bộ với task chọn mạng nền. */
+ * Sử dụng wifi_scan_lock/unlock để đồng bộ với task chọn mạng nền.
+ * Provider mechanics (mode scan-capable, raw scan) nằm ở platform_wifi. */
 static esp_err_t wifi_scan_handler(httpd_req_t *req)
 {
     if (!require_portal_access(req)) return ESP_OK;
@@ -444,38 +445,25 @@ static esp_err_t wifi_scan_handler(httpd_req_t *req)
         return ESP_OK;
     }
 
-    /* Nếu đang ở chế độ chỉ AP (PORTAL), chuyển APSTA để STA có thể quét;
-     * nếu chưa có mode nào (NULL) thì bật STA thuần để quét. */
-    wifi_mode_t mode = WIFI_MODE_NULL;
-    esp_wifi_get_mode(&mode);
-    if (mode == WIFI_MODE_AP) {
-        esp_wifi_set_mode(WIFI_MODE_APSTA);
-        vTaskDelay(pdMS_TO_TICKS(50));
-    } else if (mode == WIFI_MODE_NULL) {
-        esp_wifi_set_mode(WIFI_MODE_STA);
-        vTaskDelay(pdMS_TO_TICKS(50));
-    }
-
-    wifi_scan_config_t scan_config = {
-        .ssid = NULL,
-        .bssid = NULL,
-        .channel = 0,
+    const platform_wifi_scan_config_t scan_config = {
         .show_hidden = true,
-        .scan_type = WIFI_SCAN_TYPE_ACTIVE,
-        .scan_time = {
-            .active = {
-                .min = 100,
-                .max = 300,
-            },
-        },
+        .active_min_ms = 100,
+        .active_max_ms = 300,
     };
 
+    uint16_t count = PORTAL_SCAN_MAX_RESULTS;
     esp_err_t err = ESP_FAIL;
     for (int attempt = 0; attempt < 12; attempt++) {
-        err = esp_wifi_scan_start(&scan_config, true);
-        /* Trình quản lý Wi-Fi là chủ sở hữu trạng thái kết nối. Không bao giờ
-         * ngắt STA vì một yêu cầu HTTP chỉ để quét thành công. */
-        if (err != ESP_ERR_WIFI_STATE) break;
+        memset(s_portal_scan_records, 0, sizeof(s_portal_scan_records));
+        err = platform_wifi_scan(&scan_config, s_portal_scan_records, &count);
+        if (err != ESP_ERR_INVALID_STATE) {
+            /* Trình quản lý Wi-Fi là chủ sở hữu trạng thái kết nối. Không bao
+             * giờ ngắt STA vì một yêu cầu HTTP chỉ để quét thành công. */
+            if (err == ESP_OK) {
+                ESP_LOGI(TAG, "WiFi scan completed: %u network(s)", (unsigned)count);
+            }
+            break;
+        }
         /* STA đang bận kết nối: thử lại sau 500 ms (tối đa ~6 s) */
         vTaskDelay(pdMS_TO_TICKS(500));
     }
@@ -486,31 +474,12 @@ static esp_err_t wifi_scan_handler(httpd_req_t *req)
         return ESP_OK;
     }
 
-    /* Lấy số lượng mạng phát hiện, giới hạn ở PORTAL_SCAN_MAX_RESULTS (32) */
-    uint16_t count = 0;
-    err = esp_wifi_scan_get_ap_num(&count);
-    if (err != ESP_OK) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Could not read scan results");
-        wifi_scan_unlock();
-        return ESP_OK;
-    }
-    ESP_LOGI(TAG, "WiFi scan completed: %u network(s)", (unsigned)count);
-
     const uint16_t max_results = count > PORTAL_SCAN_MAX_RESULTS ? PORTAL_SCAN_MAX_RESULTS : count;
-    memset(s_portal_scan_records, 0, sizeof(s_portal_scan_records));
-    if (max_results > 0) {
-        uint16_t requested = max_results;
-        err = esp_wifi_scan_get_ap_records(&requested, s_portal_scan_records);
-        if (err != ESP_OK) {
-            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Could not read scan records");
-            wifi_scan_unlock();
-            return ESP_OK;
-        }
-    }
-
     char *json = s_portal_scan_json;
     size_t pos = 0;
-    /* Dựng mảng JSON: [{"ssid":...,"rssi":...,"auth":...}, ...] */
+    /* Dựng mảng JSON: [{"ssid":...,"rssi":...,"auth":...}, ...]
+     * auth: giá trị platform (giữ nguyên mã số legacy portal — xem
+     * platform_wifi_auth_mode_t). */
     pos += snprintf(json + pos, sizeof(s_portal_scan_json) - pos, "[");
     for (uint16_t i = 0; i < max_results && pos + 32 < sizeof(s_portal_scan_json); i++) {
         char ssid[65];
@@ -521,7 +490,8 @@ static esp_err_t wifi_scan_handler(httpd_req_t *req)
         pos += snprintf(json + pos, sizeof(s_portal_scan_json) - pos,
                         "%s{\"ssid\":\"%s\",\"rssi\":%d,\"auth\":%d}",
                         (pos > 1) ? "," : "", ssid,
-                        s_portal_scan_records[i].rssi, s_portal_scan_records[i].authmode);
+                        s_portal_scan_records[i].rssi,
+                        (int)s_portal_scan_records[i].auth_mode);
     }
     snprintf(json + pos, sizeof(s_portal_scan_json) - pos, "]");
 

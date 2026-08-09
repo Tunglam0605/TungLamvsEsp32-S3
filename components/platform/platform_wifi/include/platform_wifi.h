@@ -82,10 +82,40 @@ typedef struct {
     uint16_t active_max_ms; /**< Active scan: thời gian tối đa mỗi kênh (ms) */
 } platform_wifi_scan_config_t;
 
+/**
+ * @brief Phân loại bảo mật Wi-Fi trung tính với provider (từ authmode ESP-IDF).
+ *
+ *        ═══ JSON COMPATIBILITY ═══
+ *        Giá trị số CỐ Ý giữ nguyên định nghĩa wifi_auth_mode_t của ESP-IDF
+ *        v6.1 cho mọi mode có thể xuất hiện trong authmode của kết quả quét
+ *        (OPEN→0, WEP→1, WPA_PSK→2, WPA2_PSK→3, WPA_WPA2_PSK→4,
+ *        ENTERPRISE→5, WPA3_PSK→6, WPA2_WPA3_PSK→7, WAPI_PSK→8, OWE→9,
+ *        WPA3_ENT_192→10). Caller (config_portal) xuất trực tiếp giá trị này
+ *        vào JSON "auth" nên mã legacy portal không đổi.
+ *        Các mode placeholder/enterprise mới (placeholder DUMMY_1/DUMMY_2,
+ *        DPP, WPA3-Enterprise...) không bao giờ xuất hiện trong authmode kết
+ *        quả quét → map về UNKNOWN.
+ */
+typedef enum {
+    PLATFORM_WIFI_AUTH_OPEN = 0,             /**< Mạng mở (không bảo mật) */
+    PLATFORM_WIFI_AUTH_WEP = 1,              /**< WEP */
+    PLATFORM_WIFI_AUTH_WPA_PSK = 2,          /**< WPA-PSK */
+    PLATFORM_WIFI_AUTH_WPA2_PSK = 3,         /**< WPA2-PSK */
+    PLATFORM_WIFI_AUTH_WPA_WPA2_PSK = 4,     /**< WPA/WPA2 mixed */
+    PLATFORM_WIFI_AUTH_ENTERPRISE = 5,       /**< WPA2-Enterprise */
+    PLATFORM_WIFI_AUTH_WPA3_PSK = 6,         /**< WPA3-PSK */
+    PLATFORM_WIFI_AUTH_WPA2_WPA3_PSK = 7,    /**< WPA2/WPA3 mixed */
+    PLATFORM_WIFI_AUTH_WAPI_PSK = 8,         /**< WAPI-PSK */
+    PLATFORM_WIFI_AUTH_OWE = 9,              /**< OWE (WPA3 Transition) */
+    PLATFORM_WIFI_AUTH_WPA3_ENT_192 = 10,    /**< WPA3-Enterprise 192-bit */
+    PLATFORM_WIFI_AUTH_UNKNOWN = 255,        /**< Mode không nhận diện (fallback an toàn) */
+} platform_wifi_auth_mode_t;
+
 /** Một mạng quan sát được trong kết quả quét (generic, không phải wifi_ap_record_t). */
 typedef struct {
-    char ssid[33];         /**< SSID mạng (kết thúc null) */
-    int8_t rssi;           /**< RSSI dBm */
+    char ssid[33];                    /**< SSID mạng (kết thúc null) */
+    int8_t rssi;                      /**< RSSI dBm */
+    platform_wifi_auth_mode_t auth_mode; /**< Phân loại bảo mật (xem enum trên) */
 } platform_wifi_scan_record_t;
 
 /** Trạng thái STA hiện tại cho UI chẩn đoán. */
@@ -102,6 +132,10 @@ typedef struct {
  *
  *        ESP-IDF event handler nằm trong platform_wifi; caller chỉ nhận các
  *        sự kiện generic này qua callback đăng ký ở platform_wifi_start_apsta.
+ *
+ * @note  Quét có thể chuyển mode AP-only → APSTA (xem platform_wifi_scan) —
+ *        driver sẽ phát các event tương ứng (AP_STARTED/STOPPED...) và
+ *        platform_wifi cập nhật trạng thái factual theo đó.
  */
 typedef enum {
     PLATFORM_WIFI_EVENT_STA_STARTED,          /**< driver Wi-Fi STA bắt đầu */
@@ -140,16 +174,16 @@ esp_err_t platform_wifi_start_apsta(const platform_wifi_sta_network_config_t *st
                                     void *context);
 
 /**
- * @brief  Đặt credentials STA (SSID/password) cho lần kết nối sau.
+ * @brief  Ghi nhớ credentials STA (SSID/password) cho lần kết nối sau.
  *
- *         Sao chép chuỗi vào storage tĩnh của platform. Không kết nối —
- *         gọi platform_wifi_sta_connect() sau đó.
+ *         Chỉ sao chép chuỗi vào storage tĩnh của platform; KHÔNG chạm driver.
+ *         Truy cập driver thực tế xảy ra ở platform_wifi_sta_connect()
+ *         (trả ESP_ERR_INVALID_STATE nếu provider chưa init).
  *
  * @param  ssid      SSID mạng đích.
  * @param  password  Mật khẩu (WPA2/WPA3/OPEN tùy AP).
- * @return ESP_OK                cấu hình thành công
+ * @return ESP_OK                ghi nhớ thành công
  * @return ESP_ERR_INVALID_ARG   ssid NULL
- * @return ESP_ERR_INVALID_STATE driver chưa init
  */
 esp_err_t platform_wifi_sta_set_credentials(const char *ssid, const char *password);
 
@@ -215,12 +249,19 @@ bool platform_wifi_ap_is_active(void);
 /**
  * @brief  Quét Wi-Fi blocking (all channels).
  *
+ *         Trước khi quét, provider tự đảm bảo driver có khả năng STA:
+ *           - mode đã chứa STA (APSTA/STA) → quét ngay (không đổi mode)
+ *           - AP-only                → chuyển APSTA, chờ ~50 ms rồi quét
+ *           - NULL (chưa có mode)    → chuyển STA, chờ ~50 ms rồi quét
+ *         Không bao giờ chủ động ngắt STA chỉ để quét.
+ *
  *         *count là capacity đầu vào của mảng records (số phần tử tối đa),
  *         sau khi trả về là số mạng thực tế ghi vào mảng (bị clamp bởi
  *         capacity). Caller không cần biết số record tối đa của ESP-IDF.
  *
  * @param  config   Cấu hình quét (show_hidden, active window).
- * @param  records  Mảng kết quả (do caller cấp phát).
+ * @param  records  Mảng kết quả (do caller cấp phát; auth_mode được map từ
+ *                  authmode ESP-IDF sang platform_wifi_auth_mode_t).
  * @param  count    [in/out] capacity → số kết quả thực tế.
  * @return ESP_OK                quét xong
  * @return ESP_ERR_INVALID_ARG   records/count NULL hoặc *count = 0

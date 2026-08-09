@@ -89,6 +89,49 @@ static void bridge_event(platform_wifi_event_t event)
     if (s_event_callback) s_event_callback(event, s_event_context);
 }
 
+/* Map authmode ESP-IDF → platform_wifi_auth_mode_t (giá trị số giữ nguyên
+ * định nghĩa ESP-IDF để JSON "auth" của portal không đổi — xem header).
+ * Mode không xuất hiện trong authmode kết quả quét → UNKNOWN (fallback an
+ * toàn, không propagate giá trị ESP-IDF không xác định). */
+static platform_wifi_auth_mode_t map_auth_mode(wifi_auth_mode_t authmode)
+{
+    switch (authmode) {
+    case WIFI_AUTH_OPEN:            return PLATFORM_WIFI_AUTH_OPEN;
+    case WIFI_AUTH_WEP:             return PLATFORM_WIFI_AUTH_WEP;
+    case WIFI_AUTH_WPA_PSK:         return PLATFORM_WIFI_AUTH_WPA_PSK;
+    case WIFI_AUTH_WPA2_PSK:        return PLATFORM_WIFI_AUTH_WPA2_PSK;
+    case WIFI_AUTH_WPA_WPA2_PSK:    return PLATFORM_WIFI_AUTH_WPA_WPA2_PSK;
+    case WIFI_AUTH_ENTERPRISE:      return PLATFORM_WIFI_AUTH_ENTERPRISE;
+    case WIFI_AUTH_WPA3_PSK:        return PLATFORM_WIFI_AUTH_WPA3_PSK;
+    case WIFI_AUTH_WPA2_WPA3_PSK:   return PLATFORM_WIFI_AUTH_WPA2_WPA3_PSK;
+    case WIFI_AUTH_WAPI_PSK:        return PLATFORM_WIFI_AUTH_WAPI_PSK;
+    case WIFI_AUTH_OWE:             return PLATFORM_WIFI_AUTH_OWE;
+    case WIFI_AUTH_WPA3_ENT_192:    return PLATFORM_WIFI_AUTH_WPA3_ENT_192;
+    default:                        return PLATFORM_WIFI_AUTH_UNKNOWN;
+    }
+}
+
+/* Đảm bảo driver đang ở mode có khả năng quét STA (provider mechanics):
+ * AP-only → APSTA + ~50 ms; NULL → STA + ~50 ms; đã chứa STA → không đổi. */
+static esp_err_t ensure_scan_capable_mode(void)
+{
+    wifi_mode_t mode = WIFI_MODE_NULL;
+    esp_err_t err = esp_wifi_get_mode(&mode);
+    if (err != ESP_OK) return err;
+
+    if ((mode & WIFI_MODE_STA) != 0) return ESP_OK;
+    if (mode == WIFI_MODE_AP) {
+        err = esp_wifi_set_mode(WIFI_MODE_APSTA);
+    } else if (mode == WIFI_MODE_NULL) {
+        err = esp_wifi_set_mode(WIFI_MODE_STA);
+    } else {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (err != ESP_OK) return err;
+    vTaskDelay(pdMS_TO_TICKS(50));
+    return ESP_OK;
+}
+
 /* Gán IP tĩnh cho netif STA: dừng DHCP client → set ip_info → set DNS chính.
  * Lỗi DHCP_ALREADY_STOPPED được chấp nhận (behavior giữ nguyên từ wifi_init). */
 static esp_err_t apply_sta_network_config(const platform_wifi_sta_network_config_t *network)
@@ -371,6 +414,10 @@ esp_err_t platform_wifi_scan(const platform_wifi_scan_config_t *config,
     if (!config || !records || !count || *count == 0) return ESP_ERR_INVALID_ARG;
     if (!s_started) return ESP_ERR_INVALID_STATE;
 
+    /* Provider mechanics: đảm bảo mode có khả năng STA trước khi quét */
+    esp_err_t mode_err = ensure_scan_capable_mode();
+    if (mode_err != ESP_OK) return mode_err;
+
     /* Nếu capacity lớn hơn bộ đệm tĩnh, chỉ scan tối đa bộ đệm tĩnh —
      * số lượng không phải policy của platform. */
     uint16_t capacity = *count;
@@ -407,6 +454,7 @@ esp_err_t platform_wifi_scan(const platform_wifi_scan_config_t *config,
         copy_string(records[i].ssid, sizeof(records[i].ssid),
                     (const char *)s_scan_records[i].ssid);
         records[i].rssi = s_scan_records[i].rssi;
+        records[i].auth_mode = map_auth_mode(s_scan_records[i].authmode);
     }
     *count = found;
     return ESP_OK;
