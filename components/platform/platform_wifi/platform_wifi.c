@@ -145,7 +145,30 @@ static esp_err_t ensure_scan_capable_mode(void)
 static esp_err_t apply_sta_network_config(const platform_wifi_sta_network_config_t *network)
 {
     if (!s_sta_netif) return ESP_ERR_INVALID_STATE;
-    if (!network || network->dhcp) return ESP_OK;
+    if (!network) return ESP_OK;
+
+    /* DHCP is normally started by ESP-IDF's default STA-connected handler while
+     * the netif is in INIT.  A runtime change from static IPv4 leaves that
+     * client STOPPED, however, so explicitly restart only that transition. */
+    if (network->dhcp) {
+        esp_netif_dhcp_status_t dhcp_status = ESP_NETIF_DHCP_INIT;
+        esp_err_t err = esp_netif_dhcpc_get_status(s_sta_netif, &dhcp_status);
+        if (err != ESP_OK) return err;
+
+        if (dhcp_status == ESP_NETIF_DHCP_STOPPED) {
+            err = esp_netif_dhcpc_start(s_sta_netif);
+            if (err == ESP_ERR_ESP_NETIF_DHCP_ALREADY_STARTED) err = ESP_OK;
+            if (err == ESP_OK) {
+                ESP_LOGI(TAG, "STA network: DHCP client restarted");
+            }
+            return err;
+        }
+
+        if (dhcp_status == ESP_NETIF_DHCP_INIT || dhcp_status == ESP_NETIF_DHCP_STARTED) {
+            return ESP_OK;
+        }
+        return ESP_ERR_INVALID_STATE;
+    }
 
     if (!parse_ipv4(network->ip, &(esp_ip4_addr_t){0}) ||
         !parse_ipv4(network->netmask, &(esp_ip4_addr_t){0}) ||

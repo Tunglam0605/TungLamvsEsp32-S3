@@ -196,13 +196,15 @@ esp_err_t platform_wifi_sta_set_credentials(const char *ssid, const char *passwo
 /**
  * @brief  Áp cấu hình mạng STA (DHCP/IP tĩnh) lúc runtime.
  *
- *         dhcp = true  → ESP_OK, KHÔNG chạm DHCP client (không tự chuyển
- *                        static → DHCP; behavior debt của product giữ nguyên).
+ *         dhcp = true  → giữ nguyên lifecycle DHCP mặc định ở lúc boot. Nếu
+ *                        runtime trước đó dùng IP tĩnh và DHCP client đang
+ *                        STOPPED, provider khởi động lại DHCP client. Trạng
+ *                        thái STARTED là idempotent.
  *         dhcp = false → dừng DHCP client, set IP/netmask/gateway + DNS chính.
  *         Chuỗi IP được parse đồng bộ (không giữ pointer sau khi trả về).
  *
  * @param  network  Cấu hình mạng STA cần áp.
- * @return ESP_OK                 áp xong (hoặc dhcp = true)
+ * @return ESP_OK                 áp xong
  * @return ESP_ERR_INVALID_ARG    network NULL hoặc IP tĩnh thiếu/không hợp lệ
  * @return ESP_ERR_INVALID_STATE  netif STA chưa tồn tại
  * @return ESP_ERR_*              lỗi khác từ ESP-IDF (giữ nguyên)
