@@ -20,7 +20,6 @@
 
 #include "esp_log.h"
 #include "platform_time.h"
-#include "queues.h"
 
 #include <time.h>
 
@@ -44,11 +43,12 @@ static platform_time_config_t time_sync_map_config(const Config_t *config)
     };
 }
 
-void time_sync_init(void)
+void time_sync_init(const Config_t *config)
 {
     /* Hiển thị cục bộ theo giờ ICT; MQTT vẫn truyền thời gian Unix UTC epoch.
      * Policy timezone nằm ở adapter; platform áp dụng qua setenv/tzset. */
-    platform_time_config_t cfg = time_sync_map_config(&g_config);
+    if (!config) return;
+    platform_time_config_t cfg = time_sync_map_config(config);
     esp_err_t ret = platform_time_init(&cfg);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "init failed: %s", esp_err_to_name(ret));

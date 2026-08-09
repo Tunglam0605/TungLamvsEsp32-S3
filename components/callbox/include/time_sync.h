@@ -9,7 +9,7 @@
 #include "callbox_config.h"
 
 /** Bắt đầu SNTP nền (background). An toàn khi gọi nhiều lần. */
-void time_sync_init(void);
+void time_sync_init(const Config_t *config);
 
 /** Chỉ true khi RTC đã chứa timestamp Unix hợp lý. */
 bool time_sync_is_valid(void);

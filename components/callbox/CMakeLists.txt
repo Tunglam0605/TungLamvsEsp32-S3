@@ -13,6 +13,9 @@ idf_component_register(SRCS "src/protocol_types.c"
                              "src/output_renderer.c"
                              "src/wifi_init.c"
                              "src/network_link.c"
+                             "src/mqtt_client.c"
+                             "src/time_sync.c"
                     INCLUDE_DIRS "include"
                     PRIV_INCLUDE_DIRS "private_include"
-                    REQUIRES freertos platform_nvs bsp esp_timer platform_wifi)
+                    REQUIRES freertos platform_nvs bsp esp_timer platform_wifi
+                             mqtt mbedtls platform_time)

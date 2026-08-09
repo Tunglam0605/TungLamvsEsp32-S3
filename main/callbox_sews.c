@@ -33,7 +33,7 @@
  * @version 1.0.0
  * @date    2026
  *
- * @see     queues.h — Config_t, LEDCmd_t, BuzzerCmd_t
+ * @see     callbox_config.h — hợp đồng cấu hình (Config_t)
  * @see     callbox_config_store.c — load/save cấu hình
  * @see     config_portal.c — portal cấu hình qua AP
  * @see     network_status_task.c — trạng thái LED/AP
@@ -45,7 +45,7 @@
 #include "esp_log.h"
 #include "esp_err.h"
 #include "esp_mac.h"
-#include "queues.h"
+#include "callbox_config.h"
 #include "io_handler.h"
 #include "led_control.h"
 #include "output_renderer.h"
@@ -64,9 +64,10 @@
 
 static const char *TAG = "MAIN";
 
-/* Cấu hình tổng (toàn cục) — factory defaults dùng chung mọi thiết bị;
- * ID và mọi cài đặt có thể sửa qua portal. */
-Config_t g_config = {
+/* Cấu hình tổng — local của composition root (app_main). Không còn khai báo
+ * toàn cục: mọi consumer nhận cấu hình tường minh (config store, wifi_init,
+ * config portal, time_sync, MQTT). */
+static Config_t g_config = {
     /* Mặc định nhà máy dùng chung mọi thiết bị; ID và cài đặt có thể
      * thay đổi qua portal. */
     .wifi_ssid = "AGV1",
@@ -245,6 +246,9 @@ void app_main(void)
     build_configuration_ap_identity(g_config.callbox_id, ap_ssid, sizeof(ap_ssid),
                                     ap_password, sizeof(ap_password));
     wifi_set_config_ap_callback(start_config_portal_when_ap_is_ready);
+    /* Nối thông báo Rescue AP (từ wifi_init) tới phản hồi mạng (GPIO46 của
+     * network_status_task) — đảo ngược dependency: CallBox không biết main. */
+    wifi_set_rescue_ap_changed_callback(network_status_notify_rescue_ap_changed);
     esp_err_t wifi_ret = wifi_init_sta_profiles(&g_config, ap_ssid, ap_password);
     if (wifi_ret != ESP_OK) {
         ESP_LOGE(TAG, "WiFi STA/AP init failed: %s", esp_err_to_name(wifi_ret));
@@ -252,7 +256,7 @@ void app_main(void)
     /* Chạy SNTP cho mọi chế độ mạng. Nó tự động thử lại tới khi có đường
      * mạng, để các sự kiện MQTT/TCP cũng nhận timestamp UTC thật thay vì
      * giây kể từ khi khởi động. */
-    time_sync_init();
+    time_sync_init(&g_config);
     esp_err_t status_ret = network_status_task_start();
     if (status_ret != ESP_OK) {
         ESP_LOGE(TAG, "Network status task start failed: %s", esp_err_to_name(status_ret));
@@ -265,7 +269,7 @@ void app_main(void)
     vTaskDelay(pdMS_TO_TICKS(5000));
 
     /* Bước 7: khởi tạo MQTT (handshake CONTONT/SUBSCRIBE khi có mạng) */
-    mqtt_client_init();
+    mqtt_client_init(&g_config);
 
     /* Bước 8: tạo 4 task chính chạy song song:
      *   - io_handler: đọc nút (debounding) → publish vào queue

@@ -34,7 +34,7 @@
  * @date    2026
  *
  * @see     mqtt_client.c — triển khai ESP-MQTT
- * @see     state_machine.c — gọi mqtt_publish_event/status
+ * @see     state_machine.c — gọi mqtt_publish_call/cancel/sync
  * @see     callbox_sews.c — khởi tạo MQTT
  */
 #ifndef CALLBOX_MQTT_H
@@ -64,17 +64,25 @@ typedef struct {
 } MQTTMsg_t;
 
 /**
- * @brief Khởi tạo client MQTT
+ * @brief Khởi tạo client MQTT với cấu hình truyền vào tường minh.
+ *
+ * Cấu hình được chụp vào snapshot riêng của adapter; không lưu con trỏ
+ * vào Config_t của caller (portal có thể sửa đổi khi chạy).
  */
-void mqtt_client_init(void);
+void mqtt_client_init(const Config_t *config);
 
 /**
  * @brief Kết nối tới broker MQTT
  */
 void mqtt_client_connect(void);
 
-/** Tạo lại kết nối ESP-MQTT sau khi cấu hình endpoint/bảo mật thay đổi. */
-void mqtt_client_reconfigure(void);
+/**
+ * @brief Tạo lại kết nối ESP-MQTT sau khi cấu hình endpoint/bảo mật thay đổi.
+ *
+ * Nếu runtime MQTT chưa khởi tạo (portal lưu sớm trước mqtt_client_init),
+ * chỉ cập nhật snapshot — mqtt_client_init sau đó dùng cấu hình mới nhất.
+ */
+void mqtt_client_reconfigure(const Config_t *config);
 
 /**
  * @brief Đăng ký nhận topic lệnh

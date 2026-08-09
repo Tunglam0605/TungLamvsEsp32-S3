@@ -1356,7 +1356,7 @@ static esp_err_t save_handler(httpd_req_t *req)
         ESP_LOGI(TAG, "Saved ID/MQTT settings; existing STA connection kept intact");
     }
     if (mqtt_changed) {
-        mqtt_client_reconfigure();
+        mqtt_client_reconfigure(&updated);
         ESP_LOGI(TAG, "MQTT endpoint, security, credentials or logical ID changed; reconnecting MQTT");
     }
     if (strcmp(previous.sntp_primary, updated.sntp_primary) != 0 ||

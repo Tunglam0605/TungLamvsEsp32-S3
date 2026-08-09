@@ -74,6 +74,9 @@ static volatile bool s_scan_lock_held;
 static char s_ap_ssid[33] = "CALLBOX-01";
 static char s_ap_password[64] = "CALLBOX-01";
 static wifi_config_ap_callback_t s_ap_callback;
+/* Thông báo thay đổi Rescue AP — module này không biết network_status_task,
+ * BSP buzzer hay GPIO46; composition root (app_main) đăng ký triển khai. */
+static wifi_rescue_ap_changed_callback_t s_rescue_callback;
 
 /* Hàm phụ: chép chuỗi an toàn, luôn kết thúc '\0' */
 static void copy_string(char *dst, size_t dst_size, const char *src)
@@ -305,6 +308,12 @@ void wifi_set_config_ap_callback(wifi_config_ap_callback_t callback)
     s_ap_callback = callback;
 }
 
+void wifi_set_rescue_ap_changed_callback(wifi_rescue_ap_changed_callback_t callback)
+{
+    /* Một con trỏ callback duy nhất, không registry, không event bus. */
+    s_rescue_callback = callback;
+}
+
 esp_err_t wifi_init_apsta(const char *ssid, const char *password,
                           const char *ap_ssid, const char *ap_password)
 {
@@ -421,6 +430,7 @@ esp_err_t wifi_toggle_rescue_ap(bool *enabled)
         s_rescue_ap_enabled = true;
         if (enabled) *enabled = true;
         ESP_LOGW(TAG, "Rescue AP enabled by Cancel long press");
+        if (s_rescue_callback) s_rescue_callback(true);
         return ESP_OK;
     }
 
@@ -433,6 +443,7 @@ esp_err_t wifi_toggle_rescue_ap(bool *enabled)
         if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) return err;
     }
     ESP_LOGI(TAG, "Rescue AP latch disabled by Cancel long press");
+    if (s_rescue_callback) s_rescue_callback(false);
     return ESP_OK;
 }
 

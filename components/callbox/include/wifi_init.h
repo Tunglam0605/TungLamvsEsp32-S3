@@ -40,6 +40,10 @@
 
 typedef void (*wifi_config_ap_callback_t)(void);
 
+/* Thông báo thay đổi latch Rescue AP sau một chuyển đổi thành công
+ * (wifi_toggle_rescue_ap trả ESP_OK). Composition root đăng ký triển khai. */
+typedef void (*wifi_rescue_ap_changed_callback_t)(bool enabled);
+
 typedef struct {
     bool connected;
     char ssid[33];
@@ -68,6 +72,10 @@ esp_err_t wifi_apply_config(const Config_t *config);
 
 /** Đăng ký callback được gọi khi AP cấu hình cục bộ khởi động. */
 void wifi_set_config_ap_callback(wifi_config_ap_callback_t callback);
+
+/** Đăng ký callback được gọi sau khi latch Rescue AP thay đổi thành công
+ *  (chỉ khi wifi_toggle_rescue_ap trả ESP_OK). */
+void wifi_set_rescue_ap_changed_callback(wifi_rescue_ap_changed_callback_t callback);
 
 /**
  * @brief Kiểm tra Wi-Fi đã kết nối chưa

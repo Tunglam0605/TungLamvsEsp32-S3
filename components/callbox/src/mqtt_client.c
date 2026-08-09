@@ -6,6 +6,10 @@
  * ủy thác khung MQTT (framing), keep-alive, reconnect và TLS cho ESP-MQTT
  * để cùng một firmware chạy được với broker TCP nội bộ hoặc broker TLS công
  * cộng.
+ *
+ * Bộ điều hợp là người tiêu thụ CHỈ ĐỌC telemetry: trạng thái mission/comm
+ * cho heartbeat đọc từ status store của CallBox (status.Mission / status.CommState)
+ * thay vì gọi Mission Manager — MQTT không bao giờ sửa status store.
  */
 #include "callbox_mqtt.h"
 
@@ -16,8 +20,7 @@
 #include "app_event_queue.h"
 #include "network_link.h"
 #include "protocol_types.h"
-#include "queues.h"
-#include "state_machine.h"
+#include "status.h"
 #include "wifi_init.h"
 #include "time_sync.h"
 
@@ -30,11 +33,43 @@
 
 static const char *TAG = "MQTT_CLIENT";
 
+/* Ảnh cấu hình riêng của MQTT (lifetime-safe): sao chép có giới hạn các
+ * trường mà adapter cần; KHÔNG giữ con trỏ vào Config_t của caller — portal
+ * có thể sửa đổi Config_t khi chạy. */
+typedef struct {
+    char broker[64];
+    uint16_t port;
+    MqttTransport_t transport;
+    char user[32];
+    char pass[64];
+    char callbox_id[16];
+} mqtt_runtime_config_t;
+
+static mqtt_runtime_config_t s_config;
+
 static esp_mqtt_client_handle_t s_client;
 static SemaphoreHandle_t s_client_mutex;
 static volatile bool s_mqtt_connected;
 static volatile bool s_client_started;
 static QueueHandle_t s_publish_queue;
+
+/* Sao chép giới hạn, luôn kết thúc '\0'. Không lưu con trỏ vào caller. */
+static void mqtt_copy_string(char *dst, size_t dst_size, const char *src)
+{
+    strncpy(dst, src ? src : "", dst_size - 1);
+    dst[dst_size - 1] = '\0';
+}
+
+static void mqtt_copy_runtime_config(const Config_t *config)
+{
+    if (!config) return;
+    mqtt_copy_string(s_config.broker, sizeof(s_config.broker), config->mqtt_broker);
+    s_config.port = config->mqtt_port;
+    s_config.transport = config->mqtt_transport;
+    mqtt_copy_string(s_config.user, sizeof(s_config.user), config->mqtt_user);
+    mqtt_copy_string(s_config.pass, sizeof(s_config.pass), config->mqtt_pass);
+    mqtt_copy_string(s_config.callbox_id, sizeof(s_config.callbox_id), config->callbox_id);
+}
 
 static void mqtt_publish_worker(void *pvParameters)
 {
@@ -70,11 +105,11 @@ static void mqtt_publish_worker(void *pvParameters)
 
 /* ESP-MQTT giữ các con trỏ này suốt vòng đời client. Sao chép mọi giá trị
  * hiển thị cho người dùng trước khi mở kết nối để save/reconfigure không thể
- * để tầng vận chuyển tham chiếu tới trường Config_t đã bị sửa đổi. */
+ * để tầng vận chuyển tham chiếu tới cấu hình đã bị sửa đổi. */
 static char s_uri[160];
 static char s_client_id[64];
-static char s_username[sizeof(g_config.mqtt_user)];
-static char s_password[sizeof(g_config.mqtt_pass)];
+static char s_username[32];
+static char s_password[64];
 static char s_status_topic[96];
 
 static const char *mqtt_transport_name(MqttTransport_t transport)
@@ -82,11 +117,11 @@ static const char *mqtt_transport_name(MqttTransport_t transport)
     return transport == MQTT_TRANSPORT_TLS ? "TLS" : "TCP";
 }
 
-/* Enum nội bộ cố tình đặt tên in hoa; MQTT tuân theo hợp đồng dây (wire)
- * của WCS, dùng chuỗi trạng thái chữ thường. */
-static const char *mqtt_task_state_name(int task)
+/* Chuỗi trạng thái wire của WCS (chữ thường) — đọc từ status store, không
+ * phụ thuộc Mission Manager. */
+static const char *mqtt_task_state_name(TaskState_t state)
 {
-    switch (get_task_state(task)) {
+    switch (state) {
     case TASK_QUEUED: return "queued";
     case TASK_ASSIGNED: return "assigned";
     case TASK_LOCKED: return "locked";
@@ -95,10 +130,19 @@ static const char *mqtt_task_state_name(int task)
     }
 }
 
+static const char *mqtt_comm_state_name(comm_state_t state)
+{
+    switch (state) {
+    case COMM_SYNCING: return "syncing";
+    case COMM_READY: return "ready";
+    default: return "offline";
+    }
+}
+
 static void mqtt_handle_command(const char *topic, const char *payload)
 {
     char expected_topic[96];
-    snprintf(expected_topic, sizeof(expected_topic), MQTT_CMD_TOPIC, g_config.callbox_id);
+    snprintf(expected_topic, sizeof(expected_topic), MQTT_CMD_TOPIC, s_config.callbox_id);
     if (strcmp(topic, expected_topic) != 0) {
         ESP_LOGD(TAG, "Ignoring command on unexpected topic: %s", topic);
         return;
@@ -129,12 +173,12 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
     case MQTT_EVENT_CONNECTED: {
         s_mqtt_connected = true;
         char topic[96];
-        snprintf(topic, sizeof(topic), MQTT_CMD_TOPIC, g_config.callbox_id);
+        snprintf(topic, sizeof(topic), MQTT_CMD_TOPIC, s_config.callbox_id);
         const int message_id = esp_mqtt_client_subscribe(event->client, topic, MQTT_QoS);
         const app_event_t app_event = { .type = APP_EVENT_MQTT_CONNECTED };
         (void)app_event_send(&app_event, 0);
         ESP_LOGI(TAG, "Connected via %s; subscribe %s (id=%d)",
-                 mqtt_transport_name(g_config.mqtt_transport), topic, message_id);
+                 mqtt_transport_name(s_config.transport), topic, message_id);
         break;
     }
     case MQTT_EVENT_DISCONNECTED:
@@ -191,8 +235,14 @@ static void mqtt_destroy_locked(void)
     s_mqtt_connected = false;
 }
 
-void mqtt_client_init(void)
+void mqtt_client_init(const Config_t *config)
 {
+    if (!config) return;
+
+    /* Chụp ảnh cấu hình MQTT ngay trước khi dựng runtime: nếu portal đã lưu
+     * trước đó (MQTT khởi tạo muộn), snapshot này đã mang cấu hình mới nhất. */
+    mqtt_copy_runtime_config(config);
+
     s_client_mutex = xSemaphoreCreateMutex();
     if (!s_client_mutex) {
         ESP_LOGE(TAG, "Cannot create MQTT synchronization mutex");
@@ -216,17 +266,17 @@ void mqtt_client_subscribe_cmd(void)
 {
     if (!s_client || !s_mqtt_connected) return;
     char topic[96];
-    snprintf(topic, sizeof(topic), MQTT_CMD_TOPIC, g_config.callbox_id);
+    snprintf(topic, sizeof(topic), MQTT_CMD_TOPIC, s_config.callbox_id);
     (void)esp_mqtt_client_subscribe(s_client, topic, MQTT_QoS);
 }
 
 void mqtt_client_connect(void)
 {
     if (!s_client_mutex || !network_link_is_connected() ||
-        !g_config.mqtt_broker[0] || g_config.mqtt_port == 0) {
+        !s_config.broker[0] || s_config.port == 0) {
         return;
     }
-    if (g_config.mqtt_transport == MQTT_TRANSPORT_TLS && !time_sync_is_valid()) {
+    if (s_config.transport == MQTT_TRANSPORT_TLS && !time_sync_is_valid()) {
         ESP_LOGI(TAG, "TLS selected: waiting for SNTP time synchronization");
         return;
     }
@@ -238,14 +288,14 @@ void mqtt_client_connect(void)
     }
 
     snprintf(s_uri, sizeof(s_uri), "%s://%s:%u",
-             g_config.mqtt_transport == MQTT_TRANSPORT_TLS ? "mqtts" : "mqtt",
-             g_config.mqtt_broker, (unsigned)g_config.mqtt_port);
+             s_config.transport == MQTT_TRANSPORT_TLS ? "mqtts" : "mqtt",
+             s_config.broker, (unsigned)s_config.port);
     snprintf(s_client_id, sizeof(s_client_id), CALLBOX_DEVICE_NAME_PREFIX "%s",
-             g_config.callbox_id);
-    snprintf(s_status_topic, sizeof(s_status_topic), MQTT_STATUS_TOPIC, g_config.callbox_id);
-    strncpy(s_username, g_config.mqtt_user, sizeof(s_username) - 1);
+             s_config.callbox_id);
+    snprintf(s_status_topic, sizeof(s_status_topic), MQTT_STATUS_TOPIC, s_config.callbox_id);
+    strncpy(s_username, s_config.user, sizeof(s_username) - 1);
     s_username[sizeof(s_username) - 1] = '\0';
-    strncpy(s_password, g_config.mqtt_pass, sizeof(s_password) - 1);
+    strncpy(s_password, s_config.pass, sizeof(s_password) - 1);
     s_password[sizeof(s_password) - 1] = '\0';
 
     esp_mqtt_client_config_t config = {
@@ -261,7 +311,7 @@ void mqtt_client_connect(void)
         .network.timeout_ms = 10000,
         .network.reconnect_timeout_ms = 5000,
     };
-    if (g_config.mqtt_transport == MQTT_TRANSPORT_TLS) {
+    if (s_config.transport == MQTT_TRANSPORT_TLS) {
         /* Bắt buộc xác thực CA công cộng: không bao giờ tắt kiểm tra hostname/CN. */
         config.broker.verification.crt_bundle_attach = esp_crt_bundle_attach;
     }
@@ -279,15 +329,23 @@ void mqtt_client_connect(void)
         mqtt_destroy_locked();
     } else {
         s_client_started = true;
-        ESP_LOGI(TAG, "Connecting %s to %s as %s", mqtt_transport_name(g_config.mqtt_transport),
+        ESP_LOGI(TAG, "Connecting %s to %s as %s", mqtt_transport_name(s_config.transport),
                  s_uri, s_client_id);
     }
     xSemaphoreGive(s_client_mutex);
 }
 
-void mqtt_client_reconfigure(void)
+void mqtt_client_reconfigure(const Config_t *config)
 {
-    if (!s_client_mutex) return;
+    if (!config) return;
+    if (!s_client_mutex) {
+        /* Portal có thể lưu cấu hình TRƯỚC khi mqtt_client_init() chạy (MQTT
+         * khởi động muộn, sau AP/portal). Không tự ý dựng client sớm: chỉ cập
+         * nhật snapshot — mqtt_client_init() sau này sẽ dùng cấu hình mới nhất. */
+        mqtt_copy_runtime_config(config);
+        return;
+    }
+    mqtt_copy_runtime_config(config);
     xSemaphoreTake(s_client_mutex, portMAX_DELAY);
     mqtt_destroy_locked();
     xSemaphoreGive(s_client_mutex);
@@ -314,7 +372,7 @@ static void mqtt_publish(const char *topic, const char *payload, int qos, int re
 static void mqtt_publish_task_event(const char *type, int task, uint32_t seq, uint32_t timestamp)
 {
     char topic[96], payload[256];
-    snprintf(topic, sizeof(topic), MQTT_EVENT_TOPIC, g_config.callbox_id);
+    snprintf(topic, sizeof(topic), MQTT_EVENT_TOPIC, s_config.callbox_id);
     snprintf(payload, sizeof(payload),
              "{\"type\":\"%s\",\"task\":%d,\"seq\":%lu,\"ts\":%lu}",
              type, task, (unsigned long)seq, (unsigned long)timestamp);
@@ -334,7 +392,7 @@ void mqtt_publish_cancel(int task, uint32_t seq, uint32_t timestamp)
 void mqtt_publish_sync_request(uint32_t seq, uint32_t timestamp)
 {
     char topic[96], payload[256];
-    snprintf(topic, sizeof(topic), MQTT_EVENT_TOPIC, g_config.callbox_id);
+    snprintf(topic, sizeof(topic), MQTT_EVENT_TOPIC, s_config.callbox_id);
     /* sync được phạm vi theo thiết bị: cố ý không chứa trường task. */
     snprintf(payload, sizeof(payload),
              "{\"type\":\"sync_request\",\"seq\":%lu,\"ts\":%lu,\"fw\":\"%s\"}",
@@ -348,11 +406,15 @@ void mqtt_publish_status(void)
     const uint32_t uptime_sec = (uint32_t)(esp_timer_get_time() / 1000000);
     wifi_sta_status_t sta = {0};
     wifi_get_sta_status(&sta);
-    snprintf(topic, sizeof(topic), MQTT_STATUS_TOPIC, g_config.callbox_id);
+    /* Telemetry CHỈ ĐỌC từ status store — Mission Manager là chủ ghi duy nhất. */
+    snprintf(topic, sizeof(topic), MQTT_STATUS_TOPIC, s_config.callbox_id);
     snprintf(payload, sizeof(payload),
              "{\"online\":true,\"comm\":\"%s\",\"task1\":\"%s\",\"task2\":\"%s\","
              "\"rssi\":%d,\"uptime\":%lu,\"time_synced\":%s,\"fw\":\"%s\",\"ts\":%lu}",
-             get_comm_state_str(), mqtt_task_state_name(1), mqtt_task_state_name(2), (int)sta.rssi,
+             mqtt_comm_state_name(status.CommState),
+             mqtt_task_state_name(status.Mission[0]),
+             mqtt_task_state_name(status.Mission[1]),
+             (int)sta.rssi,
              (unsigned long)uptime_sec,
              time_sync_is_valid() ? "true" : "false",
              CALLBOX_FIRMWARE_VERSION,

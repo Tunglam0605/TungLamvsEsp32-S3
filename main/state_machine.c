@@ -6,7 +6,6 @@
 #include "io_handler.h"
 #include "output_renderer.h"
 #include "network_link.h"
-#include "network_status_task.h"
 #include "sequence_service.h"
 #include "status.h"
 #include "wifi_init.h"
@@ -400,7 +399,9 @@ static void tick_cancel_rescue_hold(void)
     }
     ESP_LOGW(TAG, "Rescue AP %s by 5-second Cancel hold",
              rescue_enabled ? "enabled" : "disabled");
-    network_status_notify_rescue_ap_changed(rescue_enabled);
+    /* Phản hồi network (GPIO46) do composition root đăng ký qua callback
+     * wifi_set_rescue_ap_changed_callback — Mission không gọi network_status
+     * trực tiếp. */
 }
 
 void state_machine_task(void *arg)
