@@ -26,13 +26,15 @@
  *          SNTP tự retry khi mạng chưa lên — platform không cần biết transport.
  *
  *          ═══ LIFECYCLE (TRUTHFUL) ═══
- *          s_started = true CHỈ SAU KHI mọi bước (validate → copy → timezone
- *          → SNTP start) đã thành công. Ngay sau esp_sntp_stop(), s_started
- *          chuyển false — service thực tế đã dừng, state phản ánh đúng sự
- *          thật, không fake running state.
+ *          platform_time_start() là primitive "attempt start" — KHÔNG quản lý
+ *          global state. Ownership state nằm ở public lifecycle functions:
+ *            - init: s_started = true CHỈ SAU KHI start thành công
+ *            - reconfigure: stop xong → s_started = false ngay; start mới
+ *              thành công → true
+ *          Không bao giờ fake running state.
  *
  * @author  TungLamAutomation <tunglam652004@gmail.com>
- * @version 1.0.1
+ * @version 1.0.2
  * @date    2026
  */
 #include "platform_time.h"
@@ -142,7 +144,12 @@ esp_err_t platform_time_init(const platform_time_config_t *config)
     if (s_started) {
         return ESP_OK;
     }
-    return platform_time_start(config);
+
+    esp_err_t ret = platform_time_start(config);
+    if (ret == ESP_OK) {
+        s_started = true;   /* Commit state CHỈ khi start thật sự thành công. */
+    }
+    return ret;
 }
 
 esp_err_t platform_time_reconfigure(const platform_time_config_t *config)

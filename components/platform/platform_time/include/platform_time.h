@@ -52,7 +52,7 @@
  *          (máy chủ mặc định, timezone, mốc epoch hợp lệ) là của caller.
  *
  * @author  TungLamAutomation <tunglam652004@gmail.com>
- * @version 1.0.0
+ * @version 1.0.2
  * @date    2026
  */
 #ifndef PLATFORM_TIME_H
