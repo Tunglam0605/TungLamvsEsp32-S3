@@ -89,10 +89,10 @@ static void copy_string(char *dst, size_t dst_size, const char *src)
 /* Cấu hình IP cho STA (DHCP/tĩnh) từ Config_t → platform_wifi config */
 static esp_err_t configure_sta_ip(const Config_t *config)
 {
-    if (!config || config->wifi_dhcp) return ESP_OK;
+    if (!config) return ESP_ERR_INVALID_ARG;
 
     const platform_wifi_sta_network_config_t network = {
-        .dhcp = false,
+        .dhcp = config->wifi_dhcp,
         .ip = config->wifi_ip,
         .netmask = config->wifi_netmask,
         .gateway = config->wifi_gateway,
