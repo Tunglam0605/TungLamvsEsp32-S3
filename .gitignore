@@ -11,3 +11,8 @@
 
 # Generated Python cache for the VS Code locale shim
 /.vscode/python/__pycache__/
+
+# Local MQTT broker test output
+/tools/__pycache__/
+/tools/*.py[cod]
+/tools/mqtt_background*.log
