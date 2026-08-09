@@ -1,9 +1,16 @@
 /**
  * @file    nvs_storage.h
- * @brief   Lưu/đọc cấu hình và số thứ tự (seq_num) trong NVS.
+ * @brief   CallBox persistence adapter: lưu/đọc cấu hình và seq_num trong NVS.
  *
  *          Sử dụng namespace "callbox" của NVS flash để giữ dữ liệu bền
  *          qua các lần reset/mất điện.
+ *
+ *          ═══ PHÂN TẦNG (SAU PHASE E.2) ═══
+ *          Module này là tầng product adapter — sở hữu namespace "callbox",
+ *          schema/key, chính sách lưu và mọi migration (web_pass, legacy
+ *          WiFi, mqtt_tls...). Mọi thao tác NVS thấp tầng (lifecycle, open/
+ *          close/commit, get/set) được delegate xuống component nền tảng
+ *          platform_nvs — main KHÔNG gọi nvs.h/nvs_flash.h trực tiếp.
  *
  *          ═══ CÁC KEY CHÍNH ═══
  *          ┌────────────────┬──────────────────────────────────────┐
@@ -20,9 +27,10 @@
  *          trên Config_t (thường là g_config) trước khi lưu bằng nvs_save_config.
  *
  * @author  TungLamAutomation <tunglam652004@gmail.com>
- * @version 1.0.0
+ * @version 1.0.1
  * @date    2026
  *
+ * @see     platform_nvs.h — generic NVS provider
  * @see     queues.h — Config_t
  * @see     config_portal.c — đọc/ghi cấu hình từ web
  */

@@ -1,10 +1,30 @@
 /**
  * @file    nvs_storage.c
- * @brief   Triển khai lưu/đọc cấu hình và seq_num bằng NVS (namespace "callbox").
+ * @brief   CallBox persistence adapter: lưu/đọc cấu hình và seq_num bằng NVS.
  *
  *          Module này là tầng "bền" (persistent) của ứng dụng: toàn bộ cấu
  *          hình người dùng (Wi-Fi, MQTT, ID callbox, profile WiFi) được viết
  *          vào NVS flash để giữ qua reset/mất điện.
+ *
+ *          ═══ PHÂN TẦNG (SAU PHASE E.2) ═══
+ *              CallBox Application
+ *                      │
+ *                      ▼
+ *              nvs_storage.c        ← MODULE NÀY (product persistence adapter)
+ *              - sở hữu namespace "callbox"
+ *              - sở hữu schema/key cấu hình + seq_num
+ *              - sở hữu migration (web_pass, legacy WiFi, mqtt_tls...)
+ *              - sở hữu policy profile (đã được freeze từ Phase cũ)
+ *                      │  platform_nvs_*()
+ *                      ▼
+ *              platform_nvs          ← generic provider (component nền tảng)
+ *              - nvs_flash_init/erase, nvs_open/close/commit, nvs_get_* / nvs_set_*
+ *                      │
+ *                      ▼
+ *              ESP-IDF NVS
+ *
+ *          Module này KHÔNG gọi trực tiếp nvs.h / nvs_flash.h — mọi provider
+ *          mechanics đi qua platform_nvs.
  *
  *          ═══ QUY ƯỚC KEY ═══
  *          ┌────────────────┬──────────────────────────────────────┐
@@ -16,11 +36,11 @@
  *          │ seq_num        │ Số thứ tự tin nhắn (u32)             │
  *          └────────────────┴──────────────────────────────────────┘
  *
- *          Warning: gọi nvs_flash_init() một lần duy nhất; không gọi lại
+ *          Warning: gọi nvs_storage_init() một lần duy nhất; không gọi lại
  *          trong task — module này xử lý tại app_main.
  *
  * @author  TungLamAutomation <tunglam652004@gmail.com>
- * @version 1.0.0
+ * @version 1.0.1
  * @date    2026
  *
  * @see     nvs_storage.h — API
@@ -28,8 +48,7 @@
  * @see     config_portal.c — gọi nvs_save_config khi lưu từ web
  */
 #include "nvs_storage.h"
-#include "nvs_flash.h"
-#include "nvs.h"
+#include "platform_nvs.h"
 #include "esp_log.h"
 #include <string.h>
 #include <stdio.h>
@@ -139,50 +158,43 @@ bool config_remove_wifi_profile(Config_t *config, const char *ssid)
     return false;
 }
 
-/* Đọc chuỗi NVS; nếu key chưa tồn tại thì trả về ESP_OK (giữ giá trị mặc định) */
-static esp_err_t nvs_get_string_if_present(nvs_handle_t handle,
+/* Đọc chuỗi NVS; nếu key chưa tồn tại thì trả về ESP_OK (giữ giá trị mặc định).
+ * Mọi lỗi đọc (vd. chuỗi lưu trữ quá dài) được log và propagate — không cắt. */
+static esp_err_t nvs_get_string_if_present(platform_nvs_handle_t *handle,
                                            const char *key,
                                            char *value,
                                            size_t value_size)
 {
-    size_t required = value_size;
-    esp_err_t err = nvs_get_str(handle, key, value, &required);
-    if (err == ESP_ERR_NVS_NOT_FOUND) {
-        return ESP_OK;
-    }
-    if (err == ESP_ERR_NVS_INVALID_LENGTH) {
-        ESP_LOGE(TAG, "NVS string too long for key '%s'", key);
+    bool found = false;
+    esp_err_t err = platform_nvs_get_string(handle, key, value, value_size, &found);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to read NVS string key '%s': %s", key, esp_err_to_name(err));
     }
     return err;
 }
 
 esp_err_t nvs_storage_init(void)
 {
-    esp_err_t ret = nvs_flash_init();
-    /* Nếu phân vùng NVS bị hỏng/đầy → xóa sạch và khởi tạo lại */
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_LOGW(TAG, "NVS partition was truncated and needs to be erased");
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        ret = nvs_flash_init();
-    }
-    return ret;
+    /* Lifecycle NVS flash do platform_nvs sở hữu (kể cả recovery erase khi
+     * partition bị hỏng — xem platform_nvs.h). */
+    return platform_nvs_init();
 }
 
 esp_err_t nvs_save_seq_num(uint32_t seq)
 {
-    nvs_handle_t handle;
-    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
+    platform_nvs_handle_t handle;
+    esp_err_t err = platform_nvs_open(&handle, NVS_NAMESPACE, false);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Error opening NVS handle: %s", esp_err_to_name(err));
         return err;
     }
 
     /* Ghi u32 seq_num rồi commit để chắc chắn ghi xuống flash */
-    err = nvs_set_u32(handle, NVS_SEQ_KEY, seq);
+    err = platform_nvs_set_u32(&handle, NVS_SEQ_KEY, seq);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Error setting seq_num: %s", esp_err_to_name(err));
     } else {
-        err = nvs_commit(handle);
+        err = platform_nvs_commit(&handle);
         if (err == ESP_OK) {
             ESP_LOGI(TAG, "Saved seq_num=%lu", seq);
         } else {
@@ -190,7 +202,7 @@ esp_err_t nvs_save_seq_num(uint32_t seq)
         }
     }
 
-    nvs_close(handle);
+    platform_nvs_close(&handle);
     return err;
 }
 
@@ -198,24 +210,26 @@ esp_err_t nvs_load_seq_num(uint32_t *seq)
 {
     if (!seq) return ESP_ERR_INVALID_ARG;
 
-    nvs_handle_t handle;
-    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &handle);
+    platform_nvs_handle_t handle;
+    esp_err_t err = platform_nvs_open(&handle, NVS_NAMESPACE, true);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Error opening NVS handle: %s", esp_err_to_name(err));
         *seq = 0;
         return err;
     }
 
-    /* Đọc u32 seq_num; nếu chưa có → dùng 0 */
-    err = nvs_get_u32(handle, NVS_SEQ_KEY, seq);
-    if (err != ESP_OK) {
+    /* Đọc u32 seq_num; nếu chưa có → dùng 0 (legacy: sau close luôn trả
+     * ESP_OK dù key thiếu — semantics này được giữ nguyên, không "sửa"). */
+    bool found = false;
+    err = platform_nvs_get_u32(&handle, NVS_SEQ_KEY, seq, &found);
+    if (err == ESP_OK && found) {
+        ESP_LOGI(TAG, "Loaded seq_num=%lu", *seq);
+    } else {
         ESP_LOGW(TAG, "No seq_num found in NVS, using 0");
         *seq = 0;
-    } else {
-        ESP_LOGI(TAG, "Loaded seq_num=%lu", *seq);
     }
 
-    nvs_close(handle);
+    platform_nvs_close(&handle);
     return ESP_OK;
 }
 
@@ -223,9 +237,11 @@ esp_err_t nvs_load_config(Config_t *config)
 {
     if (!config) return ESP_ERR_INVALID_ARG;
 
-    nvs_handle_t handle;
-    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
-    if (err == ESP_ERR_NVS_NOT_FOUND) {
+    platform_nvs_handle_t handle;
+    esp_err_t err = platform_nvs_open(&handle, NVS_NAMESPACE, false);
+    if (err == ESP_ERR_NOT_FOUND) {
+        /* Namespace chưa từng tạo (boot lần đầu) — dùng toàn bộ default.
+         * Mã generic ESP_ERR_NOT_FOUND do platform_nvs map từ NVS_NOT_FOUND. */
         ESP_LOGI(TAG, "No saved callbox configuration; using defaults");
         return ESP_OK;
     }
@@ -235,97 +251,106 @@ esp_err_t nvs_load_config(Config_t *config)
     esp_err_t first_error = ESP_OK;
     esp_err_t item_err;
     bool commit_web_password = false;
-    item_err = nvs_get_string_if_present(handle, NVS_WIFI_SSID_KEY,
+    item_err = nvs_get_string_if_present(&handle, NVS_WIFI_SSID_KEY,
                                          config->wifi_ssid, sizeof(config->wifi_ssid));
     if (item_err != ESP_OK && first_error == ESP_OK) first_error = item_err;
-    item_err = nvs_get_string_if_present(handle, NVS_WIFI_PASS_KEY,
+    item_err = nvs_get_string_if_present(&handle, NVS_WIFI_PASS_KEY,
                                          config->wifi_pass, sizeof(config->wifi_pass));
     if (item_err != ESP_OK && first_error == ESP_OK) first_error = item_err;
-    item_err = nvs_get_string_if_present(handle, NVS_WIFI_IP_KEY,
+    item_err = nvs_get_string_if_present(&handle, NVS_WIFI_IP_KEY,
                                          config->wifi_ip, sizeof(config->wifi_ip));
     if (item_err != ESP_OK && first_error == ESP_OK) first_error = item_err;
-    item_err = nvs_get_string_if_present(handle, NVS_WIFI_NETMASK_KEY,
+    item_err = nvs_get_string_if_present(&handle, NVS_WIFI_NETMASK_KEY,
                                          config->wifi_netmask, sizeof(config->wifi_netmask));
     if (item_err != ESP_OK && first_error == ESP_OK) first_error = item_err;
-    item_err = nvs_get_string_if_present(handle, NVS_WIFI_GATEWAY_KEY,
+    item_err = nvs_get_string_if_present(&handle, NVS_WIFI_GATEWAY_KEY,
                                          config->wifi_gateway, sizeof(config->wifi_gateway));
     if (item_err != ESP_OK && first_error == ESP_OK) first_error = item_err;
-    item_err = nvs_get_string_if_present(handle, NVS_WIFI_DNS_KEY,
+    item_err = nvs_get_string_if_present(&handle, NVS_WIFI_DNS_KEY,
                                          config->wifi_dns, sizeof(config->wifi_dns));
     if (item_err != ESP_OK && first_error == ESP_OK) first_error = item_err;
-    item_err = nvs_get_string_if_present(handle, NVS_SNTP_PRIMARY_KEY,
+    item_err = nvs_get_string_if_present(&handle, NVS_SNTP_PRIMARY_KEY,
                                          config->sntp_primary, sizeof(config->sntp_primary));
     if (item_err != ESP_OK && first_error == ESP_OK) first_error = item_err;
-    item_err = nvs_get_string_if_present(handle, NVS_SNTP_FALLBACK_KEY,
+    item_err = nvs_get_string_if_present(&handle, NVS_SNTP_FALLBACK_KEY,
                                          config->sntp_fallback, sizeof(config->sntp_fallback));
     if (item_err != ESP_OK && first_error == ESP_OK) first_error = item_err;
+    bool found_dhcp = false;
     uint8_t dhcp = config->wifi_dhcp ? 1 : 0;
-    item_err = nvs_get_u8(handle, NVS_WIFI_DHCP_KEY, &dhcp);
-    if (item_err == ESP_OK) {
+    item_err = platform_nvs_get_u8(&handle, NVS_WIFI_DHCP_KEY, &dhcp, &found_dhcp);
+    if (found_dhcp) {
         config->wifi_dhcp = dhcp != 0;
-    } else if (item_err != ESP_ERR_NVS_NOT_FOUND && first_error == ESP_OK) {
+    } else if (item_err != ESP_OK && first_error == ESP_OK) {
         first_error = item_err;
     }
-    item_err = nvs_get_string_if_present(handle, NVS_MQTT_BROKER_KEY,
+    item_err = nvs_get_string_if_present(&handle, NVS_MQTT_BROKER_KEY,
                                          config->mqtt_broker, sizeof(config->mqtt_broker));
     if (item_err != ESP_OK && first_error == ESP_OK) first_error = item_err;
-    item_err = nvs_get_string_if_present(handle, NVS_MQTT_USER_KEY,
+    item_err = nvs_get_string_if_present(&handle, NVS_MQTT_USER_KEY,
                                          config->mqtt_user, sizeof(config->mqtt_user));
     if (item_err != ESP_OK && first_error == ESP_OK) first_error = item_err;
-    item_err = nvs_get_string_if_present(handle, NVS_MQTT_PASS_KEY,
+    item_err = nvs_get_string_if_present(&handle, NVS_MQTT_PASS_KEY,
                                          config->mqtt_pass, sizeof(config->mqtt_pass));
     if (item_err != ESP_OK && first_error == ESP_OK) first_error = item_err;
-    item_err = nvs_get_string_if_present(handle, NVS_CALLBOX_ID_KEY,
+    item_err = nvs_get_string_if_present(&handle, NVS_CALLBOX_ID_KEY,
                                          config->callbox_id, sizeof(config->callbox_id));
     if (item_err != ESP_OK && first_error == ESP_OK) first_error = item_err;
 
-    /* web_pass: nếu chưa tồn tại → ghi mặc định ngay (migrate bản cũ) */
+    /* web_pass: nếu key chưa tồn tại (ESP_OK + !found) → ghi mặc định ngay
+     * (migrate bản cũ). Mặc định này do Config_t/caller cung cấp — platform
+     * không biết. Lỗi khác (vd. INVALID_LENGTH) chỉ được ghi vào first_error,
+     * KHÔNG ghi đè giá trị đang lưu trữ. */
     size_t web_password_len = sizeof(config->web_password);
-    item_err = nvs_get_str(handle, NVS_WEB_PASS_KEY, config->web_password, &web_password_len);
-    if (item_err == ESP_ERR_NVS_NOT_FOUND) {
-        item_err = nvs_set_str(handle, NVS_WEB_PASS_KEY, config->web_password);
+    bool found_web_pass = false;
+    item_err = platform_nvs_get_string(&handle, NVS_WEB_PASS_KEY,
+                                       config->web_password, web_password_len, &found_web_pass);
+    if (item_err == ESP_OK && !found_web_pass) {
+        item_err = platform_nvs_set_string(&handle, NVS_WEB_PASS_KEY, config->web_password);
         commit_web_password = item_err == ESP_OK;
     }
     if (item_err != ESP_OK && first_error == ESP_OK) first_error = item_err;
 
+    bool found_port = false;
     uint16_t port = config->mqtt_port;
-    item_err = nvs_get_u16(handle, NVS_MQTT_PORT_KEY, &port);
-    if (item_err == ESP_OK) {
+    item_err = platform_nvs_get_u16(&handle, NVS_MQTT_PORT_KEY, &port, &found_port);
+    if (found_port) {
         config->mqtt_port = port;
-    } else if (item_err != ESP_ERR_NVS_NOT_FOUND && first_error == ESP_OK) {
+    } else if (item_err != ESP_OK && first_error == ESP_OK) {
         first_error = item_err;
     }
 
     /* Key thiếu nghĩa là bản cài đặt cũ; giữ hành vi broker plaintext ban đầu
      * bằng cách giữ mặc định TCP từ Config_t. */
+    bool found_mqtt_tls = false;
     uint8_t mqtt_tls = config->mqtt_transport == MQTT_TRANSPORT_TLS ? 1U : 0U;
-    item_err = nvs_get_u8(handle, NVS_MQTT_TRANSPORT_KEY, &mqtt_tls);
-    if (item_err == ESP_OK) {
+    item_err = platform_nvs_get_u8(&handle, NVS_MQTT_TRANSPORT_KEY, &mqtt_tls, &found_mqtt_tls);
+    if (found_mqtt_tls) {
         config->mqtt_transport = mqtt_tls ? MQTT_TRANSPORT_TLS : MQTT_TRANSPORT_TCP;
-    } else if (item_err != ESP_ERR_NVS_NOT_FOUND && first_error == ESP_OK) {
+    } else if (item_err != ESP_OK && first_error == ESP_OK) {
         first_error = item_err;
     }
 
     /* Đọc danh sách profile: wifi_count + wifi{i}_ssid/wifi{i}_pass */
+    bool found_profile_count = false;
     uint8_t profile_count = config->wifi_profile_count;
-    item_err = nvs_get_u8(handle, NVS_WIFI_COUNT_KEY, &profile_count);
-    if (item_err == ESP_OK) {
+    item_err = platform_nvs_get_u8(&handle, NVS_WIFI_COUNT_KEY, &profile_count, &found_profile_count);
+    if (found_profile_count) {
         if (profile_count > MAX_WIFI_PROFILES) profile_count = MAX_WIFI_PROFILES;
         config->wifi_profile_count = profile_count;
         for (uint8_t i = 0; i < profile_count; i++) {
             char key[16];
             snprintf(key, sizeof(key), "wifi%u_ssid", (unsigned)i);
-            item_err = nvs_get_string_if_present(handle, key,
+            item_err = nvs_get_string_if_present(&handle, key,
                                                  config->wifi_profiles[i].ssid,
                                                  sizeof(config->wifi_profiles[i].ssid));
             if (item_err != ESP_OK && first_error == ESP_OK) first_error = item_err;
             snprintf(key, sizeof(key), "wifi%u_pass", (unsigned)i);
-            item_err = nvs_get_string_if_present(handle, key,
+            item_err = nvs_get_string_if_present(&handle, key,
                                                  config->wifi_profiles[i].password,
                                                  sizeof(config->wifi_profiles[i].password));
             if (item_err != ESP_OK && first_error == ESP_OK) first_error = item_err;
         }
-    } else if (item_err != ESP_ERR_NVS_NOT_FOUND && first_error == ESP_OK) {
+    } else if (item_err != ESP_OK && first_error == ESP_OK) {
         first_error = item_err;
     }
 
@@ -335,10 +360,10 @@ esp_err_t nvs_load_config(Config_t *config)
     }
 
     if (commit_web_password) {
-        item_err = nvs_commit(handle);
+        item_err = platform_nvs_commit(&handle);
         if (item_err != ESP_OK && first_error == ESP_OK) first_error = item_err;
     }
-    nvs_close(handle);
+    platform_nvs_close(&handle);
     ESP_LOGI(TAG, "Configuration loaded: callbox=%s broker=%s:%u WiFi=%s",
              config->callbox_id, config->mqtt_broker, config->mqtt_port,
              config->wifi_ssid[0] ? config->wifi_ssid : "<not configured>");
@@ -349,43 +374,44 @@ esp_err_t nvs_save_config(const Config_t *config)
 {
     if (!config) return ESP_ERR_INVALID_ARG;
 
-    nvs_handle_t handle;
-    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
+    platform_nvs_handle_t handle;
+    esp_err_t err = platform_nvs_open(&handle, NVS_NAMESPACE, false);
     if (err != ESP_OK) return err;
 
-    /* Ghi lần lượt mọi key; nếu 1 key lỗi thì dừng chuỗi ghi (chuỗi if) */
-    err = nvs_set_str(handle, NVS_WIFI_SSID_KEY, config->wifi_ssid);
-    if (err == ESP_OK) err = nvs_set_str(handle, NVS_WIFI_PASS_KEY, config->wifi_pass);
-    if (err == ESP_OK) err = nvs_set_u8(handle, NVS_WIFI_DHCP_KEY, config->wifi_dhcp ? 1 : 0);
-    if (err == ESP_OK) err = nvs_set_str(handle, NVS_WIFI_IP_KEY, config->wifi_ip);
-    if (err == ESP_OK) err = nvs_set_str(handle, NVS_WIFI_NETMASK_KEY, config->wifi_netmask);
-    if (err == ESP_OK) err = nvs_set_str(handle, NVS_WIFI_GATEWAY_KEY, config->wifi_gateway);
-    if (err == ESP_OK) err = nvs_set_str(handle, NVS_WIFI_DNS_KEY, config->wifi_dns);
-    if (err == ESP_OK) err = nvs_set_str(handle, NVS_SNTP_PRIMARY_KEY, config->sntp_primary);
-    if (err == ESP_OK) err = nvs_set_str(handle, NVS_SNTP_FALLBACK_KEY, config->sntp_fallback);
-    if (err == ESP_OK) err = nvs_set_str(handle, NVS_MQTT_BROKER_KEY, config->mqtt_broker);
-    if (err == ESP_OK) err = nvs_set_u16(handle, NVS_MQTT_PORT_KEY, config->mqtt_port);
-    if (err == ESP_OK) err = nvs_set_u8(handle, NVS_MQTT_TRANSPORT_KEY,
-                                        config->mqtt_transport == MQTT_TRANSPORT_TLS ? 1U : 0U);
-    if (err == ESP_OK) err = nvs_set_str(handle, NVS_MQTT_USER_KEY, config->mqtt_user);
-    if (err == ESP_OK) err = nvs_set_str(handle, NVS_MQTT_PASS_KEY, config->mqtt_pass);
-    if (err == ESP_OK) err = nvs_set_str(handle, NVS_CALLBOX_ID_KEY, config->callbox_id);
-    if (err == ESP_OK) err = nvs_set_str(handle, NVS_WEB_PASS_KEY, config->web_password);
+    /* Mở 1 lần → ghi lần lượt mọi key; nếu 1 key lỗi thì dừng chuỗi ghi
+     * (chuỗi if) → COMMIT duy nhất khi mọi SET thành công → đóng. */
+    err = platform_nvs_set_string(&handle, NVS_WIFI_SSID_KEY, config->wifi_ssid);
+    if (err == ESP_OK) err = platform_nvs_set_string(&handle, NVS_WIFI_PASS_KEY, config->wifi_pass);
+    if (err == ESP_OK) err = platform_nvs_set_u8(&handle, NVS_WIFI_DHCP_KEY, config->wifi_dhcp ? 1 : 0);
+    if (err == ESP_OK) err = platform_nvs_set_string(&handle, NVS_WIFI_IP_KEY, config->wifi_ip);
+    if (err == ESP_OK) err = platform_nvs_set_string(&handle, NVS_WIFI_NETMASK_KEY, config->wifi_netmask);
+    if (err == ESP_OK) err = platform_nvs_set_string(&handle, NVS_WIFI_GATEWAY_KEY, config->wifi_gateway);
+    if (err == ESP_OK) err = platform_nvs_set_string(&handle, NVS_WIFI_DNS_KEY, config->wifi_dns);
+    if (err == ESP_OK) err = platform_nvs_set_string(&handle, NVS_SNTP_PRIMARY_KEY, config->sntp_primary);
+    if (err == ESP_OK) err = platform_nvs_set_string(&handle, NVS_SNTP_FALLBACK_KEY, config->sntp_fallback);
+    if (err == ESP_OK) err = platform_nvs_set_string(&handle, NVS_MQTT_BROKER_KEY, config->mqtt_broker);
+    if (err == ESP_OK) err = platform_nvs_set_u16(&handle, NVS_MQTT_PORT_KEY, config->mqtt_port);
+    if (err == ESP_OK) err = platform_nvs_set_u8(&handle, NVS_MQTT_TRANSPORT_KEY,
+                                                 config->mqtt_transport == MQTT_TRANSPORT_TLS ? 1U : 0U);
+    if (err == ESP_OK) err = platform_nvs_set_string(&handle, NVS_MQTT_USER_KEY, config->mqtt_user);
+    if (err == ESP_OK) err = platform_nvs_set_string(&handle, NVS_MQTT_PASS_KEY, config->mqtt_pass);
+    if (err == ESP_OK) err = platform_nvs_set_string(&handle, NVS_CALLBOX_ID_KEY, config->callbox_id);
+    if (err == ESP_OK) err = platform_nvs_set_string(&handle, NVS_WEB_PASS_KEY, config->web_password);
     if (err == ESP_OK) {
         /* Ghi từng profile mạng nhớ: wifi{i}_ssid / wifi{i}_pass */
         uint8_t count = config->wifi_profile_count > MAX_WIFI_PROFILES ? MAX_WIFI_PROFILES : config->wifi_profile_count;
-        err = nvs_set_u8(handle, NVS_WIFI_COUNT_KEY, count);
+        err = platform_nvs_set_u8(&handle, NVS_WIFI_COUNT_KEY, count);
         for (uint8_t i = 0; err == ESP_OK && i < count; i++) {
             char key[16];
             snprintf(key, sizeof(key), "wifi%u_ssid", (unsigned)i);
-            err = nvs_set_str(handle, key, config->wifi_profiles[i].ssid);
+            err = platform_nvs_set_string(&handle, key, config->wifi_profiles[i].ssid);
             snprintf(key, sizeof(key), "wifi%u_pass", (unsigned)i);
-            if (err == ESP_OK) err = nvs_set_str(handle, key, config->wifi_profiles[i].password);
+            if (err == ESP_OK) err = platform_nvs_set_string(&handle, key, config->wifi_profiles[i].password);
         }
     }
-    if (err == ESP_OK) err = nvs_commit(handle);
+    if (err == ESP_OK) err = platform_nvs_commit(&handle);
 
-    nvs_close(handle);
+    platform_nvs_close(&handle);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to save configuration: %s", esp_err_to_name(err));
     } else {
@@ -398,5 +424,5 @@ esp_err_t nvs_save_config(const Config_t *config)
 esp_err_t nvs_storage_erase_all(void)
 {
     ESP_LOGW(TAG, "Erasing all NVS data");
-    return nvs_flash_erase();
+    return platform_nvs_erase_all();
 }
