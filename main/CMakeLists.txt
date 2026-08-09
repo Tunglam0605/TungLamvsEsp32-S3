@@ -1,18 +1,14 @@
-idf_component_register(SRCS "network_link.c" "output_renderer.c" "protocol_types.c" "app_event_queue.c" "callbox_sews.c"
+idf_component_register(SRCS "network_link.c" "output_renderer.c" "callbox_sews.c"
                              "callbox_io.c"
-                             "app_event_queue.c"
-                             "button_gate.c"
                              "config_portal.c"
                              "io_handler.c"
                              "io_debug.c"
                              "led_control.c"
                              "mqtt_client.c"
                              "network_status_task.c"
-                             "protocol_types.c"
                              "sequence_service.c"
                              "sequence_store.c"
                              "state_machine.c"
-                             "status.c"
                              "time_sync.c"
                              "wifi_init.c"
                              "callbox_config_store.c"
@@ -21,4 +17,4 @@ idf_component_register(SRCS "network_link.c" "output_renderer.c" "protocol_types
                     EMBED_FILES "../img/company-logo-transparent.png"
                     REQUIRES freertos esp_netif esp_event esp_timer
                              bsp esp_http_server mqtt mbedtls lwip platform_time
-                             platform_nvs platform_wifi)
+                             platform_nvs platform_wifi callbox)
