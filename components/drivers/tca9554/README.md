@@ -1,3 +1,6 @@
 # TCA9554 driver
 
-Driver generic TCA9554 8-pin I/O expander. Public API nằm trong include/tca9554.h: init/deinit device, cấu hình direction/output, read input và write output. Driver không có mutex, không tự tạo I2C bus, không biết DO1/Task/active-low. BSP caller truyền bus/config, serialize access và diễn giải logic output.
+Driver generic cho expander I2C TCA9554. BSP cấp I2C bus, address và diễn giải P0…P7; driver chỉ thực hiện config/output register bằng ESP-IDF i2c_master API.
+
+Quy ước active-low và DO shadow/mutex là contract BSP DO, không phải business policy driver.
+

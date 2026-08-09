@@ -1,5 +1,16 @@
-# main
+# main — composition entrypoint
 
-`main` chỉ là ESP-IDF entrypoint: `app_main() → callbox_app_run()`.
+main chỉ chứa ESP-IDF entrypoint:
 
-Nó chỉ require component `callbox`; không sở hữu Mission, MQTT, Wi‑Fi policy, portal, persistence hoặc BSP mapping. Logic mới phải nằm ở component phù hợp để tránh quay lại kiến trúc monolithic.
+    app_main() → callbox_app_run()
+
+Nó require component callbox và không là nơi đặt logic sản phẩm. Giữ entrypoint mỏng giúp firmware vẫn chia lớp, test/audit dependency rõ và tránh quay lại kiến trúc monolithic.
+
+main không sở hữu:
+
+- Mission state, sequence, retry hoặc button policy;
+- MQTT, Wi-Fi product policy, portal hoặc NVS schema;
+- mapping phần cứng, BSP hoặc driver.
+
+Khi cần thêm chức năng, đặt vào CallBox, BSP hoặc Platform theo responsibility tương ứng; không thêm xử lý nghiệp vụ vào app_main.
+

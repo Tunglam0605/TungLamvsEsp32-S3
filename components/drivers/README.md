@@ -1,5 +1,8 @@
 # Drivers
 
-Driver là abstraction IC generic, không biết board hay nghiệp vụ. Driver chỉ phụ thuộc ESP-IDF peripheral APIs; caller/BSP chịu ownership bus, locking và active-low semantics.
+Driver là access generic cho IC, dưới BSP và không biết tên chân board hay CallBox business semantics.
 
-- [tca9554](tca9554/README.md): I/O expander 8-bit.
+- [tca9554](tca9554/README.md) — I2C GPIO expander dùng cho DO.
+
+Driver có thể dùng ESP-IDF nhưng không được phụ thuộc BSP hoặc CallBox.
+

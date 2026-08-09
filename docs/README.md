@@ -1,8 +1,10 @@
-# Tài liệu tham chiếu
+# Documentation
 
-| File | Vai trò |
+| Tài liệu | Vai trò |
 |---|---|
-| `Giao tiep MQTT TCP Bo goi WCS.docx` | Hợp đồng MQTT/WCS tham chiếu |
-| `Phuong_an_Bo_goi_AGV_SEW_20260706.docx` | Phương án kỹ thuật AGV SEW tham chiếu |
+| [WCS_MQTT_INTERFACE.md](WCS_MQTT_INTERFACE.md) | **Primary integration contract** cho IT/WCS/backend |
+| Giao tiep MQTT TCP Bo goi WCS.docx | Tài liệu tham khảo/historical |
+| Phuong_an_Bo_goi_AGV_SEW_20260706.docx | Tài liệu tham khảo/historical |
 
-DOCX không được firmware biên dịch. Khi khác source hiện tại, executable source là nguồn hành vi thực tế.
+Khi DOCX cũ mâu thuẫn với WCS_MQTT_INTERFACE.md hoặc executable source, source hiện tại và đặc tả MQTT/WCS hiện tại là authoritative.
+

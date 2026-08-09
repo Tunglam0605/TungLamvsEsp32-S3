@@ -1,12 +1,6 @@
 # Tools
 
-## mqtt_broker_test.py
+tools/mqtt_broker_test.py là MQTT 3.1.1 broker test LAN cho firmware development. Nó hỗ trợ test interactive accepted, assigned, locked, completed, rejected, overdue và cancel_ack.
 
-Broker MQTT 3.1.1 tối giản để test LAN; không phải broker production và không cung cấp TLS/auth/persistence production.
+Nó không thay thế WCS/broker production: không có persistence, ACL, TLS production hoặc HA. Để test broker LAN, cấu hình CallBox trỏ broker IP máy test, port 1883 và logical CallBox ID tương ứng.
 
-```powershell
-$py = 'C:\Espressif\tools\python\v6.1-dev\venv\Scripts\python.exe'
-& $py -u .\tools\mqtt_broker_test.py --bind 0.0.0.0 --port 1883 --id 001
-```
-
-Cấu hình CallBox tới IP LAN máy chạy tool, port 1883, cùng ID. Tool hiển thị phím gửi lệnh WCS thử nghiệm. `__pycache__/` và `mqtt_background*.log` là artifact ignored.

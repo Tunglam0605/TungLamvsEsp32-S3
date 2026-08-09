@@ -1,58 +1,74 @@
 # CallBox product/runtime
 
-include/ là public component interface, private_include/ là contract nội bộ persistence, src/ là implementation. Không phải mọi header là API ổn định ngoài component.
+CallBox là lớp sản phẩm: nó ánh xạ I/O board thành nghiệp vụ, quản lý Mission và kết nối WCS. include chứa public component contract; private_include là persistence contract nội bộ; src là implementation.
 
-## Bootstrap
+Đặc tả wire protocol cho IT/WCS: [WCS MQTT interface](../../docs/WCS_MQTT_INTERFACE.md).
 
-callbox_app_run khởi tạo: NVS → config → sequence service → app-event queue → business buzzer queue → BSP → LED/output → IO → Mission → AP identity/callback → Wi-Fi → time sync → network status → Ethernet → delay 5 s → MQTT → tasks. NVS, sequence, app-event queue và buzzer queue lỗi là fatal; BSP/Wi-Fi/network-status/Ethernet lỗi được log và tiếp tục.
+## Bootstrap và ownership
 
-## Module ownership
+callbox_app_run khởi tạo NVS/config → sequence service → queues → BSP → I/O/output → Mission → Wi-Fi/AP → SNTP → network status → Ethernet → MQTT → tasks. NVS, sequence và các queue lõi là fatal khi lỗi; lỗi phần cứng/uplink được log để các đường còn lại tiếp tục.
 
-| Module | Files | Sở hữu |
-|---|---|---|
-| bootstrap | callbox_app.c | product composition |
-| mission | state_machine.c, status.c | WCS states/transactions |
-| protocol | protocol_types.c | JSON command codec |
-| input | io_handler.c, button_gate.c, callbox_io.c | debounce/gate/mapping |
-| output | output_renderer.c, led_control.c | LEDs/tower/business buzzer |
-| MQTT | mqtt_client.c | ESP-MQTT/TX/status |
-| network | wifi_init.c, network_link.c | profiles/AP/uplink |
-| portal | config_portal.c | HTTP config/session |
-| feedback | network_status_task.c | AP LED/GPIO46 patterns |
-| persistence | nvs_storage.c, callbox_config_store.c | Config schema |
-| sequence | sequence_service.c, sequence_store.c | monotonic seq |
-| time | time_sync.c | product SNTP policy |
+| Module | Files | Owns | Inputs | Outputs/dependencies |
+|---|---|---|---|---|
+| Bootstrap | callbox_app.c | Composition | Config/NVS | BSP, Platform, tasks |
+| Mission manager | state_machine.c, status.c | Mission/transaction/Comm | button + WCS event | output snapshot, MQTT events |
+| Protocol | protocol_types.c | JSON parse | MQTT payload | protocol_command_t |
+| Input | io_handler.c, button_gate.c, callbox_io.c | debounce/gate/map | BSP DI | ButtonMsg |
+| Output | output_renderer.c, led_control.c | physical render only | application snapshot | BSP DO/buzzer |
+| MQTT adapter | mqtt_client.c | ESP-MQTT/TX/status | Config, snapshot | app events, broker |
+| Wi-Fi policy | wifi_init.c, network_link.c | profile/AP policy | Config, Platform state | network link |
+| Portal | config_portal.c | HTTP session/config | HTTP | NVS/config runtime apply |
+| Persistence | nvs_storage.c, callbox_config_store.c | Config schema | NVS | Config_t |
+| Sequence | sequence_service.c, sequence_store.c | monotonic global seq | Mission | NVS persistence |
+| Time | time_sync.c | product SNTP policy | Config | Platform time |
 
-## Tasks và queues
+## Mission Manager
 
-Tasks: io_handler 2048/5 (10 ms sample; debounce 100 ms, guard 300 ms), state_machine 3072/10 (20 ms), mqtt_comm 4096/8 (100 ms), mqtt_tx 3072/7, output_renderer 3072/7, buzzer_task 2048/6, network_status 3072/6 (200 ms), wifi_select 4096/5.
+Mission Manager là single writer của mission, pending transaction và Comm. State là idle, queued, assigned, locked, completed. WCS authoritative: local CALL không tự queued; matching accepted mới queued.
 
-Queues: app event=24, button=16, I/O state=1, renderer snapshot=1, business buzzer=10, MQTT TX=24. Luồng là producer task → single owner consumer; output renderer chỉ derive snapshot, không mutate mission.
+Task1/Task2 độc lập. Admission CALL/CANCEL yêu cầu Comm READY, network link, MQTT và không có pending conflict. Retry transaction dùng cùng seq mỗi 5 giây, tối đa hai retry, deadline 15 giây. Sequence được persist trước khi expose nên reboot có thể skip số nhưng không reuse.
 
-## Mission / Cancel / output
+Cancel chỉ queued/assigned; khi cả hai hợp lệ, chọn CallSequence lớn hơn. Locked không cancelable. Cancel ngắn xử lý khi release; giữ Cancel 5 giây toggle Rescue AP và không gửi cancel ngắn.
 
-State: idle, queued, assigned, locked, completed. Nhấn call chỉ tạo pending CALL; matching WCS accepted mới queued, assigned/locked/completed do WCS. Admission cần COMM_READY, uplink, MQTT, task idle và không transaction xung đột. Task1/Task2 độc lập.
+## Input, output và feedback
 
-Retry 5 s, tối đa 2; retry giữ sequence. Sequence lưu high-watermark trước khi expose, vì vậy reset có thể skip nhưng không reuse seq.
+io_handler sample 10 ms; debounce 100 ms; guard 300 ms. button_gate là lớp admission trước Mission, vì vậy spam/giữ nút không tạo nhiều transaction.
 
-Cancel ngắn xử lý lúc release; chỉ queued/assigned, chọn CallSequence lớn nhất. Hold Cancel ≥5 s toggle Rescue AP và không gửi cancel thường.
+Output Renderer chỉ nhận snapshot read-only, derive LED/tower/buzzer và không mutate Mission/Comm/pending. LED task pending blink chậm; queued/assigned/locked ON; idle OFF; reject FLASH_3. Tower ưu tiên: Comm chưa ready đỏ blink → error đỏ → overdue vàng blink → mission active vàng → ready idle xanh.
 
-Task LED: pending blink chậm; queued/assigned/locked ON; idle OFF; error FLASH_3. Cancel pending blink chậm, ack FLASH_2. Tower priority: comm chưa ready đỏ blink → error đỏ ON → overdue vàng blink → mission active vàng ON → ready idle xanh ON. DO1 beep: call 100 ms, assigned 100 ms, config saved 120 ms, cancel ack 150 ms, transaction failed 650 ms.
+DO1 là business buzzer: call 100 ms, assigned 100 ms, config saved 120 ms, cancel ACK 150 ms, transaction failure 650 ms. GPIO46 là feedback network riêng.
 
-## MQTT/WCS
+## MQTT, uplink và portal
 
-Topics QoS1: callbox/{id}/event, cmd, status. Commands: accepted, assigned, locked, completed, cancel_ack, rejected, overdue, sync. Reject reasons: none, locked, duplicate, no_task, wcs_busy. Event call/cancel có type, task, seq, ts; sync_request có type, seq, ts, fw. Status retained: online, comm (offline/syncing/ready), task1, task2, rssi, uptime, time_synced, fw, ts. Reconnect vào syncing; matching sync restore cả hai mission và mở button gate.
+MQTT adapter dùng ESP-MQTT TCP/TLS, QoS 1, LWT/status retained. Callback MQTT chỉ biến payload thành app event, không mutate Mission. Network link là Wi-Fi STA OR W5500 Ethernet; topic không đổi.
 
-## Wi-Fi, AP, portal
+Wi-Fi policy giữ tối đa năm profile, chọn SSID nhìn thấy mạnh nhất, quản lý AP/Rescue AP và runtime DHCP/static mapping. Portal flow là parse → validate → persist NVS → update Config_t → selective Wi-Fi/MQTT/SNTP apply.
 
-wifi_init sở hữu max 5 profiles, strongest visible selection, scan lock, Rescue AP và runtime network config. Background scan cap 40; portal cap 32; active scan 100–300 ms, show_hidden=true. AP auto-stop cần STA stable 30 s, AP active, rescue off, zero AP clients và portal inactive.
+Runtime network path sau H.2.1:
 
-AP identity là CALLBOX-<id>-<MAC6>; MAC6 là ba byte cuối MAC factory viết hoa, fallback CALLBOX-<id> khi đọc MAC lỗi. Password luôn CALLBOX-<id>, không phải final SSID. AP dùng 192.168.65.204/24, channel 1, tối đa 4 client. GPIO46 network feedback: STA connected 2×100 ms tại 2000 Hz; disconnected 650 ms tại 1600 Hz; Rescue enable 3×100 ms tại 2000 Hz; Rescue disable 2×450 ms tại 1600 Hz, gap 150 ms. Callback Rescue AP nối Wi-Fi policy với network_status, không có dependency trực tiếp Mission → network feedback.
+    Portal save → wifi_apply_config → configure_sta_ip
+                → platform_wifi_apply_sta_network_config
 
-Routes: GET /, POST /login, GET /logo.jpg, POST /save, GET /api/wifi-scan, /api/config, /api/io-status, /api/status, /api/wifi-profiles; POST /api/wifi-profiles/delete, /api/session/open, /api/session/ping, /api/session/finish. Save: parse → validate → persist NVS → update Config_t → selective Wi-Fi/MQTT/SNTP runtime apply. Cookie cb_auth 30 phút; active lease 30 s.
+Điều này áp dụng cho cả DHCP và static; raw ESP-NETIF DHCP lifecycle thuộc Platform.
 
-## Persistence
+## Tasks, queues và concurrency
 
-Namespace callbox. Config keys: wifi_ssid, wifi_pass, wifi_dhcp, wifi_ip, wifi_mask, wifi_gw, wifi_dns, mqtt_broker, mqtt_port, mqtt_tls, mqtt_user, mqtt_pass, callbox_id, web_pass, sntp_primary, sntp_fallback, wifi_count, wifiN_ssid, wifiN_pass. Sequence key seq_num. Không rename/type-change schema khi cần tương thích NVS cũ.
+| Task | Priority | Nhịp/chức năng |
+|---|---:|---|
+| io_handler | 5 | 10 ms input sample |
+| state_machine | 10 | 20 ms, owner business state |
+| mqtt_comm | 8 | 100 ms supervisor/heartbeat |
+| mqtt_tx | 7 | publish socket worker |
+| output_renderer | 7 | output snapshot |
+| buzzer_task | 6 | business feedback |
+| network_status | 6 | 200 ms AP/network feedback |
+| wifi_select | 5 | scan/profile selection |
 
-Xem root README, platform Wi-Fi và BSP.
+Queue app event=24, button=16, I/O state=1, renderer snapshot=1, business buzzer=10, MQTT TX=24. Producer gửi queue cho owner; mutex dùng cho resource/config snapshot, không thay thế ownership.
+
+## Error behavior và debt
+
+Lỗi transaction tạo feedback; retry timeout không tự giả định WCS state. MQTT reconnect đưa Comm về syncing cho tới sync hợp lệ. TLS chờ SNTP time valid.
+
+P2/P3 còn: sequence init mutex cleanup, AP-start lifecycle HW validation, MQTT config snapshot concurrency, multi-field status snapshot consistency, rescue feedback mailbox đơn slot, legacy/dead comments/APIs.
+

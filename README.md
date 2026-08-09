@@ -1,71 +1,119 @@
 # CallBox SEWS — ESP32-S3
 
-Firmware ESP-IDF cho **Waveshare ESP32-S3-POE-ETH-8DI-8DO**. CallBox nhận nút vật lý, giao tiếp WCS qua MQTT và điều khiển LED/tháp đèn/còi.
+Firmware ESP-IDF cho Waveshare ESP32-S3-POE-ETH-8DI-8DO. CallBox nhận nút vật lý, điều khiển tháp đèn/còi và giao tiếp WCS qua MQTT.
 
-## Nghiệp vụ
-- **Task 1 — Exchange Cart:** trả xe đầy và yêu cầu xe rỗng.
-- **Task 2 — Supply Empty Cart:** yêu cầu cấp xe rỗng.
-- Hai task độc lập; WCS là nguồn trạng thái authoritative.
-- **Cancel:** chỉ hủy task `queued`/`assigned` có `CallSequence` mới nhất; `locked` không hủy từ CallBox.
+## Mục đích nghiệp vụ
 
-## Kiến trúc
-```text
-main/app_main → callbox_app_run
-                    ├─ CallBox: product/runtime, MQTT, portal, policy, NVS
-                    ├─ BSP: board Waveshare → TCA9554 driver + ESP-IDF
-                    └─ Platform: Wi‑Fi / NVS / time → ESP-IDF
-```
-Hướng dependency: `main → callbox`; `callbox → bsp/platform`; `bsp → driver/ESP-IDF`; `platform → ESP-IDF`. Cấm Platform → CallBox, BSP → CallBox, Driver → BSP và CallBox → main.
+- Task 1 — Exchange Cart: trả xe đầy và yêu cầu xe rỗng.
+- Task 2 — Supply Empty Cart: yêu cầu cấp xe rỗng.
+- Hai task độc lập. WCS là nguồn trạng thái authoritative.
+- Cancel chỉ nhắm task queued/assigned có CallSequence mới nhất; locked không hủy từ CallBox.
 
-## Cây nguồn
-```text
-main/                       entrypoint ESP-IDF mỏng
-components/callbox/         product/runtime CallBox
-components/bsp/             phần cứng Waveshare
-components/drivers/tca9554/ driver IC generic
-components/platform/        adapter Wi‑Fi, NVS, SNTP
-docs/                       tài liệu WCS tham chiếu
-tools/                      MQTT broker test cục bộ
-```
-Đọc sâu: [main](main/README.md), [components](components/README.md), [CallBox](components/callbox/README.md), [BSP](components/bsp/README.md), [drivers](components/drivers/README.md), [platform](components/platform/README.md), [docs](docs/README.md), [tools](tools/README.md).
+## Kiến trúc hệ thống
 
-## I/O vật lý
-| Kênh | GPIO/TCA | Vai trò |
+    Operator → CallBox → MQTT Broker → WCS
+                   │
+                   ├─ Wi-Fi STA hoặc W5500 Ethernet
+                   └─ Web portal cục bộ để commissioning
+
+Portal không phải production API của WCS. Đặc tả cho IT/WCS: [WCS / IT MQTT Interface Specification](docs/WCS_MQTT_INTERFACE.md).
+
+## Kiến trúc repository
+
+    main/app_main → callbox_app_run
+                       ├─ CallBox: product policy, Mission, MQTT, portal
+                       ├─ BSP: board Waveshare
+                       │   └─ driver TCA9554
+                       └─ Platform: Wi-Fi, NVS, time
+
+Dependency chỉ đi xuống: main → CallBox → BSP/Platform; BSP → driver/ESP-IDF; Platform → ESP-IDF. CallBox không phụ thuộc main; BSP/Platform không biết nghiệp vụ CallBox.
+
+## Hardware mapping
+
+| Kênh | Mapping | Vai trò |
 |---|---|---|
-| DI1/GPIO4 | — | Cancel |
-| DI2/GPIO5 | — | Task 2 |
-| DI3/GPIO6 | — | Task 1 |
+| DI1 / GPIO4 | Input active-low | Cancel |
+| DI2 / GPIO5 | Input active-low | Task 2 |
+| DI3 / GPIO6 | Input active-low | Task 1 |
 | DI4–DI8 | — | Chưa dùng |
-| DO1/P0 | TCA9554 | Còi nghiệp vụ |
-| DO2/P1, DO3/P2, DO4/P3 | TCA9554 | Tháp đỏ, vàng, xanh |
-| DO5/P4, DO6/P5, DO7/P6 | TCA9554 | LED Cancel, Task2, Task1 |
-| DO8/P7 | TCA9554 | LED AP |
-| GPIO46 | onboard | Còi báo mạng |
-Thay đổi ý nghĩa thiết bị tại `components/callbox/src/callbox_io.c`; raw board wiring thuộc BSP.
+| DO1 / TCA P0 | Output active-low | Còi nghiệp vụ/tháp |
+| DO2 / P1, DO3 / P2, DO4 / P3 | — | Tháp đỏ, vàng, xanh |
+| DO5 / P4, DO6 / P5, DO7 / P6 | — | LED Cancel, Task2, Task1 |
+| DO8 / P7 | — | LED AP |
+| GPIO46 | On-board | Còi feedback mạng |
 
-## MQTT/WCS
-Topics QoS 1: `callbox/{id}/event`, `callbox/{id}/cmd`, `callbox/{id}/status`. Client ID là `AUBOT-Callbox-<id>`; heartbeat 15 s, keepalive 30 s, LWT retained `{"online":false}`. MQTT reconnect luôn yêu cầu sync; button chỉ nhận call khi matching sync đưa Comm về `ready`.
+Ý nghĩa nghiệp vụ I/O nằm tại components/callbox/src/callbox_io.c; wiring/driver là trách nhiệm BSP.
 
-## Mạng, AP và portal
-- Network link = Wi‑Fi STA **OR** W5500 Ethernet; Ethernet-only được hỗ trợ.
-- Tối đa 5 Wi‑Fi đã nhớ; chọn SSID nhìn thấy mạnh nhất.
-- AP: SSID `CALLBOX-<id>-<MAC6>`; password `CALLBOX-<id>`; fallback SSID không suffix nếu đọc MAC lỗi.
-- AP `192.168.65.204/24`, channel 1, tối đa 4 client.
-- Giữ Cancel ≥5 s toggle Rescue AP. AP tự tắt khi STA ổn định ≥30 s, rescue tắt, không client và portal inactive.
-- Portal STA: username `admin`, password factory `aubot`; AP subnet có bypass cứu hộ.
+## Runtime boot
 
-## Build / flash
-ESP-IDF đã xác nhận: `v6.1-dev`, ESP32-S3, GCC 15.2.0.
-```powershell
-$env:PYTHONPATH = "$PWD\.vscode\python"
-$env:PROCESSOR_ARCHITECTURE = 'AMD64'
-. 'C:\Espressif\tools\Microsoft.v6.1-dev.PowerShell_profile.ps1'
-idf.py set-target esp32s3
-idf.py -B build-win build
-idf.py -B build-win -p COM18 flash
-idf.py -B build-win -p COM18 monitor
-```
-Baseline source `6493d671`: bin `0x119B30` (1,153,840 bytes), partition `0x200000`, free ~45%. Nếu Windows parallel build gặp GCC ICE trong ESP-IDF `esp_lcd`, dùng `ninja -C build-win -j1`; đây không phải source defect CallBox.
+Bootstrap khởi tạo NVS/config/sequence/queues/BSP/I-O/Mission, sau đó Wi-Fi/AP, SNTP, network status, Ethernet, chờ 5 giây và khởi tạo MQTT/tasks. Khi MQTT kết nối, CallBox vào syncing, gửi sync_request; chỉ sync đúng mới đưa Comm về ready để nhận thao tác cục bộ.
 
-## Validation / nợ kỹ thuật
-P0/P1 = 0. Còn P2/P3: sequence init mutex cleanup, AP-start lifecycle HW test, MQTT config snapshot, status multi-field snapshot, rescue-beep mailbox, legacy/dead comments. Hardware acceptance vẫn phải test DI/DO, Wi‑Fi/Ethernet, portal, Rescue AP, MQTT TCP/TLS, Task coexist/cancel/locked/reject/overdue/persistence và static→DHCP không reboot. Đổi credential factory trước production.
+## Mission và MQTT/WCS
+
+CALL chỉ tạo transaction pending và LED nháy chậm. matching accepted mới chuyển Mission queued; assigned/locked/completed do WCS quyết định. Retry giữ nguyên seq, vì vậy WCS phải deduplicate.
+
+Topics QoS 1:
+
+    callbox/{id}/event   CallBox → WCS
+    callbox/{id}/cmd     WCS → CallBox
+    callbox/{id}/status  CallBox → WCS, retained
+
+Client ID là AUBOT-Callbox-{id}; heartbeat 15 giây, keepalive 30 giây, LWT retained là {"online":false}. JSON, correlation seq/ref_seq, retry, sync và trách nhiệm backend nằm trong [đặc tả MQTT/WCS](docs/WCS_MQTT_INTERFACE.md).
+
+## Network, AP và portal
+
+- Uplink là Wi-Fi STA hoặc W5500 Ethernet; MQTT không đổi theo uplink.
+- Lưu tối đa năm Wi-Fi profile và chọn SSID nhìn thấy có RSSI mạnh nhất.
+- AP: CALLBOX-{id}-{MAC6}; password CALLBOX-{id}; IP 192.168.65.204/24.
+- Giữ Cancel tối thiểu 5 giây để bật/tắt Rescue AP.
+- AP tự tắt khi STA ổn định ít nhất 30 giây, rescue tắt, không có AP client và portal inactive.
+- Portal qua STA: username admin, mật khẩu factory aubot. AP subnet có recovery bypass.
+
+Đổi credential factory trước production.
+
+## Build và flash
+
+Lệnh chính, không phụ thuộc máy cụ thể:
+
+    idf.py set-target esp32s3
+    idf.py build
+    idf.py -p <PORT> flash
+    idf.py -p <PORT> monitor
+
+### Validated Windows development environment
+
+Đã xác nhận với ESP-IDF v6.1-dev và GCC 15.2.0. Thư mục build đã dùng trong máy phát triển có thể đặt build-win:
+
+    idf.py -B build-win build
+    idf.py -B build-win -p COM18 flash
+
+COM18 chỉ là ví dụ, thay bằng cổng thiết bị thực tế. Nếu parallel build gặp GCC ICE bên trong ESP-IDF, chạy ninja -C build-win -j1.
+
+## Validation state
+
+Source baseline cuối: 88669b8a35de7968d55a215d3102af5b049cdf0a.
+
+- H.2 provider DHCP: 6493d671 — provider khởi động lại DHCP khi runtime static → DHCP.
+- H.2.1 CallBox mapping: 88669b8 — portal save → wifi_apply_config → configure_sta_ip → platform_wifi_apply_sta_network_config cho cả DHCP và static.
+- Build source đã pass: 1,153,840 byte (0x119B30), app partition 0x200000, còn khoảng 45%.
+- Commit tài liệu không làm thay đổi binary.
+
+Runtime static → DHCP phần cứng vẫn **NOT RUN**; không được coi là hardware acceptance PASS.
+
+## Documentation map
+
+- [main](main/README.md) — ESP-IDF entrypoint.
+- [components](components/README.md) — dependency layers.
+- [CallBox](components/callbox/README.md) — engineering/runtime guide.
+- [BSP](components/bsp/README.md), [drivers](components/drivers/README.md), [platform](components/platform/README.md).
+- [docs](docs/README.md) — tài liệu handoff; [WCS MQTT interface](docs/WCS_MQTT_INTERFACE.md).
+- [tools](tools/README.md) — broker test cục bộ.
+
+## Known nonblocking debt
+
+P0 = 0, P1 = 0. P2/P3 còn: sequence init mutex cleanup, AP-start lifecycle/hardware validation, MQTT runtime config snapshot concurrency, multi-field status snapshot consistency, rescue notification mailbox đơn slot, legacy/dead comments/APIs.
+
+## Hardware acceptance outstanding
+
+Trước nghiệm thu cần test DI/DO, Wi-Fi/Ethernet, portal/Rescue AP, MQTT TCP/TLS, đồng thời Task1+Task2, cancel/locked/rejected/overdue, persistence và toàn bộ ma trận DHCP không reboot.
+

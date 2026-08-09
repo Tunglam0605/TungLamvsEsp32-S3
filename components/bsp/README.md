@@ -1,11 +1,15 @@
 # BSP — Waveshare ESP32-S3-POE-ETH-8DI-8DO
 
-BSP sở hữu board initialization, DI, DO, I2C private, W5500 Ethernet và buzzer onboard. BSP không biết Task1/Task2/Cancel, Mission, MQTT hoặc WCS.
+BSP là lớp hardware semantic, không biết Mission, MQTT, portal hay task nghiệp vụ. Nó khởi tạo board, đọc tám DI active-low, điều khiển tám DO qua TCA9554 và cung cấp Ethernet/buzzer board.
 
-Init order: DI → private I2C → DO → GPIO46 buzzer.
+| Module | Responsibility |
+|---|---|
+| bsp_board | init toàn board |
+| bsp_di | GPIO4–11, đọc DI raw |
+| bsp_do | DO shadow register, all-off safe state |
+| bsp_expander | TCA9554 at 0x20, I2C1 SDA42/SCL41, 400 kHz |
+| bsp_buzzer | GPIO46 feedback buzzer |
+| bsp_eth | W5500 board transport |
 
-- DI GPIO4–GPIO11, active-low; product mapping thuộc CallBox.
-- I2C private: I2C_NUM_1, SCL GPIO41, SDA GPIO42; application không nhận raw bus handle.
-- DO: TCA9554 address 0x20, 400 kHz, timeout 100 ms; mutex BSP-owned, transactional shadow, safe all-off 0xFF. Active-low xử lý BSP-side.
-- W5500: INT12, MOSI13, MISO14, SCLK15, CS16, RESET39; SPI2 20 MHz.
-- Buzzer GPIO46/LEDC là feedback mạng, tách DO1.
+Mapping DI/DO sang Cancel/Task/LED chỉ nằm ở CallBox callbox_io.c. BSP không được thêm logic task hoặc policy AP.
+
