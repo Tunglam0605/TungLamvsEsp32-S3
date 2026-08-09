@@ -1,6 +1,6 @@
 # CallBox SEWS — WCS / IT MQTT Interface Specification
 
-Tài liệu này là hợp đồng tích hợp cho đội IT, backend và WCS. Hành vi được mô tả theo firmware source baseline 88669b8a35de7968d55a215d3102af5b049cdf0a.
+Tài liệu này là hợp đồng tích hợp cho đội IT, backend và WCS. Hành vi Mission/DHCP có baseline 88669b8a35de7968d55a215d3102af5b049cdf0a; portal authentication hiện tại có thêm 77fb093e03ed891eff27083affe2f5d6d9eb71c1. Commit tài liệu không làm thay đổi firmware binary.
 
 ## 1. Phạm vi và nguyên tắc
 
@@ -108,7 +108,7 @@ ref_seq phải khớp CALL seq đang pending. Call pending được xóa và Mis
 
     {"type":"assigned","task":1,"ref_seq":1042,"agv_id":"AGV03","ts":1751791870}
 
-ref_seq vẫn là CALL seq gốc; Mission thành assigned. agv_id là tùy chọn trong parser nhưng WCS nên gửi để CallBox lưu/display.
+ref_seq vẫn là CALL seq gốc; Mission thành assigned. agv_id là tùy chọn, tối đa 31 ký tự. WCS nên gửi khi có identity assignment để CallBox giữ trong local mission context và khôi phục qua sync snapshot. agv_id không được publish trong heartbeat/status hiện tại.
 
 ### locked
 
@@ -166,6 +166,17 @@ sync.ref_seq phải bằng sync_request seq đang pending. task1_state và task2
 
 Matching sync overwrite/reconcile cả hai task, xóa local CALL/CANCEL stale và chuyển Comm sang ready. Sync không khớp bị bỏ qua.
 
+### Retry và timeout của sync_request
+
+CallBox tạo persistent seq mới khi bắt đầu một sync transaction. Cùng transaction retry sau khoảng 5 giây và 10 giây, giữ nguyên seq. Tại khoảng 15 giây transaction hết hạn; nếu MQTT còn kết nối, CallBox tạo transaction sync **mới** với seq mới.
+
+    t≈0 s:  sync_request seq=2001
+    t≈5 s:  retry sync_request seq=2001
+    t≈10 s: retry sync_request seq=2001
+    t≈15 s: seq=2001 expire; new sync_request seq=2002
+
+WCS phải deduplicate retry cùng seq nhưng trả snapshot authoritative cho mỗi transaction sync mới. Khi current request đã là seq=2002, sync đến muộn ref_seq=2001 bị bỏ qua.
+
 ## 7. Status, online và LWT
 
 Status retained đi lên callbox/{id}/status:
@@ -183,6 +194,8 @@ Status retained đi lên callbox/{id}/status:
     }
 
 comm có offline, syncing hoặc ready. task có idle, queued, assigned, locked, completed.
+
+Heartbeat/status hiện tại không có agv_id, mission_id hoặc CallSequence. Correlation dùng seq/ref_seq; identity/state đầy đủ được khôi phục qua sync snapshot.
 
 online=true không đồng nghĩa buttons đã vận hành: online=true + comm=syncing nghĩa MQTT lên nhưng CallBox vẫn chờ WCS sync. Dashboard nên hiển thị riêng online và operational-ready.
 
@@ -246,7 +259,13 @@ Khuyến nghị ACL cho CallBox 001:
 
 Đây là khuyến nghị deployment; firmware không tự enforce broker ACL.
 
-Portal qua STA yêu cầu admin và web_password (factory aubot). Truy cập từ AP subnet có recovery bypass. Đây không phải WCS credential/API.
+Portal qua STA hoặc AP đều yêu cầu admin / aubot. Firmware hiện ép web_password thành aubot sau mỗi boot, vì vậy không được hứa hẹn custom password lưu bền qua reboot. Đây không phải WCS credential/API.
+
+## 10.1 Giới hạn MQTT command inbound
+
+Firmware chỉ nhận đúng topic callbox/{id}/cmd. Command bị bỏ qua nếu topic dài từ 160 byte trở lên, payload dài từ 512 byte trở lên, hoặc MQTT giao payload theo fragment (current_data_offset khác 0). Firmware không có reassembly fragment command.
+
+task, seq, ref_seq, ts và taskN_seq phải là JSON number, không gửi dưới dạng chuỗi. Parser dùng buffer type 20 byte, reason 16 byte, taskN_state 16 byte, agv_id/taskN_agv_id 32 byte (tối đa 31 ký tự payload). Chuỗi quá dài có thể làm command parse fail; với trường tùy chọn có thể bị bỏ trống.
 
 ## 11. Khuyến nghị backend và xử lý lỗi
 
@@ -291,4 +310,4 @@ Các mục dưới đây là kế hoạch nghiệm thu, chưa được đánh d�
 | IT-25 | Wi-Fi-only | Wi-Fi uplink | MQTT | topics không đổi |
 | IT-26 | Ethernet-only | W5500 uplink | MQTT | topics không đổi |
 | IT-27 | TLS | TLS config | broker TLS | certificate/time valid |
-
+| IT-28 | sync timeout/new seq | Không trả sync seq=2001 | Nhận sync seq=2002, bỏ old response | late ref=2001 ignored; current ref=2002 accepted |

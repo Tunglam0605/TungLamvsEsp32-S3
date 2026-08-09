@@ -36,7 +36,7 @@ Dependency chỉ đi xuống: main → CallBox → BSP/Platform; BSP → driver/
 | DI2 / GPIO5 | Input active-low | Task 2 |
 | DI3 / GPIO6 | Input active-low | Task 1 |
 | DI4–DI8 | — | Chưa dùng |
-| DO1 / TCA P0 | Output active-low | Còi nghiệp vụ/tháp |
+| DO1 / TCA P0 | Output active-low | Còi nghiệp vụ |
 | DO2 / P1, DO3 / P2, DO4 / P3 | — | Tháp đỏ, vàng, xanh |
 | DO5 / P4, DO6 / P5, DO7 / P6 | — | LED Cancel, Task2, Task1 |
 | DO8 / P7 | — | LED AP |
@@ -67,7 +67,7 @@ Client ID là AUBOT-Callbox-{id}; heartbeat 15 giây, keepalive 30 giây, LWT re
 - AP: CALLBOX-{id}-{MAC6}; password CALLBOX-{id}; IP 192.168.65.204/24.
 - Giữ Cancel tối thiểu 5 giây để bật/tắt Rescue AP.
 - AP tự tắt khi STA ổn định ít nhất 30 giây, rescue tắt, không có AP client và portal inactive.
-- Portal qua STA: username admin, mật khẩu factory aubot. AP subnet có recovery bypass.
+- Portal qua STA hoặc AP: username admin, mật khẩu aubot. Firmware hiện ép mật khẩu này ở mỗi lần boot, nên chưa hỗ trợ mật khẩu portal tùy chỉnh bền vững.
 
 Đổi credential factory trước production.
 
@@ -91,7 +91,7 @@ COM18 chỉ là ví dụ, thay bằng cổng thiết bị thực tế. Nếu par
 
 ## Validation state
 
-Source baseline cuối: 88669b8a35de7968d55a215d3102af5b049cdf0a.
+Firmware functional baseline: H.2.1 là 88669b8a35de7968d55a215d3102af5b049cdf0a; portal authentication hiện tại là 77fb093e03ed891eff27083affe2f5d6d9eb71c1. Commit tài liệu không làm thay đổi binary.
 
 - H.2 provider DHCP: 6493d671 — provider khởi động lại DHCP khi runtime static → DHCP.
 - H.2.1 CallBox mapping: 88669b8 — portal save → wifi_apply_config → configure_sta_ip → platform_wifi_apply_sta_network_config cho cả DHCP và static.
@@ -116,4 +116,3 @@ P0 = 0, P1 = 0. P2/P3 còn: sequence init mutex cleanup, AP-start lifecycle/hard
 ## Hardware acceptance outstanding
 
 Trước nghiệm thu cần test DI/DO, Wi-Fi/Ethernet, portal/Rescue AP, MQTT TCP/TLS, đồng thời Task1+Task2, cancel/locked/rejected/overdue, persistence và toàn bộ ma trận DHCP không reboot.
-

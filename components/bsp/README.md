@@ -6,10 +6,9 @@ BSP là lớp hardware semantic, không biết Mission, MQTT, portal hay task ng
 |---|---|
 | bsp_board | init toàn board |
 | bsp_di | GPIO4–11, đọc DI raw |
-| bsp_do | DO shadow register, all-off safe state |
-| bsp_expander | TCA9554 at 0x20, I2C1 SDA42/SCL41, 400 kHz |
+| bsp_i2c | owns I2C_NUM_1, SCL GPIO41, SDA GPIO42 |
+| bsp_do | TCA9554 0x20/400 kHz, active-low, mutex/shadow, all-off 0xFF |
 | bsp_buzzer | GPIO46 feedback buzzer |
 | bsp_eth | W5500 board transport |
 
-Mapping DI/DO sang Cancel/Task/LED chỉ nằm ở CallBox callbox_io.c. BSP không được thêm logic task hoặc policy AP.
-
+TCA9554 là driver generic tại components/drivers/tca9554; bsp_do consume driver và bus do bsp_i2c sở hữu. Mapping DI/DO sang Cancel/Task/LED chỉ nằm ở CallBox callbox_io.c. BSP không được thêm logic task hoặc policy AP.

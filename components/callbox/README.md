@@ -40,7 +40,7 @@ DO1 là business buzzer: call 100 ms, assigned 100 ms, config saved 120 ms, canc
 
 ## MQTT, uplink và portal
 
-MQTT adapter dùng ESP-MQTT TCP/TLS, QoS 1, LWT/status retained. Callback MQTT chỉ biến payload thành app event, không mutate Mission. Network link là Wi-Fi STA OR W5500 Ethernet; topic không đổi.
+MQTT adapter dùng ESP-MQTT TCP/TLS, QoS 1, LWT/status retained. Callback MQTT chỉ biến payload thành app event, không mutate Mission. agv_id tối đa 31 ký tự được giữ trong context Mission để reconcile qua sync; nó không xuất hiện trong heartbeat/status hiện tại. Network link là Wi-Fi STA OR W5500 Ethernet; topic không đổi.
 
 Wi-Fi policy giữ tối đa năm profile, chọn SSID nhìn thấy mạnh nhất, quản lý AP/Rescue AP và runtime DHCP/static mapping. Portal flow là parse → validate → persist NVS → update Config_t → selective Wi-Fi/MQTT/SNTP apply.
 
@@ -71,4 +71,3 @@ Queue app event=24, button=16, I/O state=1, renderer snapshot=1, business buzzer
 Lỗi transaction tạo feedback; retry timeout không tự giả định WCS state. MQTT reconnect đưa Comm về syncing cho tới sync hợp lệ. TLS chờ SNTP time valid.
 
 P2/P3 còn: sequence init mutex cleanup, AP-start lifecycle HW validation, MQTT config snapshot concurrency, multi-field status snapshot consistency, rescue feedback mailbox đơn slot, legacy/dead comments/APIs.
-
