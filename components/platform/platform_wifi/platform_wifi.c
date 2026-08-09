@@ -89,10 +89,11 @@ static void bridge_event(platform_wifi_event_t event)
     if (s_event_callback) s_event_callback(event, s_event_context);
 }
 
-/* Map authmode ESP-IDF → platform_wifi_auth_mode_t (giá trị số giữ nguyên
- * định nghĩa ESP-IDF để JSON "auth" của portal không đổi — xem header).
- * Mode không xuất hiện trong authmode kết quả quét → UNKNOWN (fallback an
- * toàn, không propagate giá trị ESP-IDF không xác định). */
+/* Map authmode ESP-IDF → platform_wifi_auth_mode_t — map TƯỜNG MINH mọi giá
+ * trị wifi_auth_mode_t v6.1 (xem header platform_wifi.h về hợp đồng số 0..17
+ * với JSON "auth" của portal). Mọi giá trị provider ngoài hợp đồng → UNMAPPED.
+ * Lưu ý: WIFI_AUTH_WPA2_ENTERPRISE là alias == WIFI_AUTH_ENTERPRISE (cùng
+ * giá trị 5) nên không tạo case riêng (lỗi duplicate case). */
 static platform_wifi_auth_mode_t map_auth_mode(wifi_auth_mode_t authmode)
 {
     switch (authmode) {
@@ -107,7 +108,14 @@ static platform_wifi_auth_mode_t map_auth_mode(wifi_auth_mode_t authmode)
     case WIFI_AUTH_WAPI_PSK:        return PLATFORM_WIFI_AUTH_WAPI_PSK;
     case WIFI_AUTH_OWE:             return PLATFORM_WIFI_AUTH_OWE;
     case WIFI_AUTH_WPA3_ENT_192:    return PLATFORM_WIFI_AUTH_WPA3_ENT_192;
-    default:                        return PLATFORM_WIFI_AUTH_UNKNOWN;
+    case WIFI_AUTH_DUMMY_1:         return PLATFORM_WIFI_AUTH_RESERVED_11;
+    case WIFI_AUTH_DUMMY_2:         return PLATFORM_WIFI_AUTH_RESERVED_12;
+    case WIFI_AUTH_DPP:             return PLATFORM_WIFI_AUTH_DPP;
+    case WIFI_AUTH_WPA3_ENTERPRISE: return PLATFORM_WIFI_AUTH_WPA3_ENTERPRISE;
+    case WIFI_AUTH_WPA2_WPA3_ENTERPRISE: return PLATFORM_WIFI_AUTH_WPA2_WPA3_ENTERPRISE;
+    case WIFI_AUTH_WPA_ENTERPRISE:  return PLATFORM_WIFI_AUTH_WPA_ENTERPRISE;
+    case WIFI_AUTH_MAX:             return PLATFORM_WIFI_AUTH_UNKNOWN;
+    default:                        return PLATFORM_WIFI_AUTH_UNMAPPED;
     }
 }
 

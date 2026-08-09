@@ -86,15 +86,14 @@ typedef struct {
  * @brief Phân loại bảo mật Wi-Fi trung tính với provider (từ authmode ESP-IDF).
  *
  *        ═══ JSON COMPATIBILITY ═══
- *        Giá trị số CỐ Ý giữ nguyên định nghĩa wifi_auth_mode_t của ESP-IDF
- *        v6.1 cho mọi mode có thể xuất hiện trong authmode của kết quả quét
- *        (OPEN→0, WEP→1, WPA_PSK→2, WPA2_PSK→3, WPA_WPA2_PSK→4,
- *        ENTERPRISE→5, WPA3_PSK→6, WPA2_WPA3_PSK→7, WAPI_PSK→8, OWE→9,
- *        WPA3_ENT_192→10). Caller (config_portal) xuất trực tiếp giá trị này
- *        vào JSON "auth" nên mã legacy portal không đổi.
- *        Các mode placeholder/enterprise mới (placeholder DUMMY_1/DUMMY_2,
- *        DPP, WPA3-Enterprise...) không bao giờ xuất hiện trong authmode kết
- *        quả quét → map về UNKNOWN.
+ *        Giá trị số 0..17 CỐ Ý giữ nguyên định nghĩa wifi_auth_mode_t của
+ *        ESP-IDF v6.1 (bao gồm placeholder/reserved 11..12, DPP 13, WPA3-
+ *        Enterprise 14, WPA2/WPA3-Enterprise 15, WPA-Enterprise 16 và WIFI_
+ *        AUTH_MAX 17) để caller (config_portal) xuất trực tiếp vào JSON
+ *        "auth" với mã legacy portal không đổi.
+ *        PLATFORM_WIFI_AUTH_UNMAPPED = 255 dành riêng cho giá trị provider
+ *        ngoài hợp đồng 0..17 này (không thuộc firmware/phiên bản đang
+ *        chạy).
  */
 typedef enum {
     PLATFORM_WIFI_AUTH_OPEN = 0,             /**< Mạng mở (không bảo mật) */
@@ -108,7 +107,14 @@ typedef enum {
     PLATFORM_WIFI_AUTH_WAPI_PSK = 8,         /**< WAPI-PSK */
     PLATFORM_WIFI_AUTH_OWE = 9,              /**< OWE (WPA3 Transition) */
     PLATFORM_WIFI_AUTH_WPA3_ENT_192 = 10,    /**< WPA3-Enterprise 192-bit */
-    PLATFORM_WIFI_AUTH_UNKNOWN = 255,        /**< Mode không nhận diện (fallback an toàn) */
+    PLATFORM_WIFI_AUTH_RESERVED_11 = 11,     /**< Reserved 11 = WIFI_AUTH_DUMMY_1 v6.1 (placeholder, giữ mã legacy) */
+    PLATFORM_WIFI_AUTH_RESERVED_12 = 12,     /**< Reserved 12 = WIFI_AUTH_DUMMY_2 v6.1 (placeholder, giữ mã legacy) */
+    PLATFORM_WIFI_AUTH_DPP = 13,             /**< DPP (Device Provisioning Protocol) */
+    PLATFORM_WIFI_AUTH_WPA3_ENTERPRISE = 14, /**< WPA3-Enterprise Only Mode */
+    PLATFORM_WIFI_AUTH_WPA2_WPA3_ENTERPRISE = 15, /**< WPA3-Enterprise Transition Mode */
+    PLATFORM_WIFI_AUTH_WPA_ENTERPRISE = 16,  /**< WPA-Enterprise security */
+    PLATFORM_WIFI_AUTH_UNKNOWN = 17,         /**< WIFI_AUTH_MAX v6.1 (phân loại quét hợp lệ, giữ mã legacy) */
+    PLATFORM_WIFI_AUTH_UNMAPPED = 255,       /**< Giá trị provider ngoài hợp đồng 0..17 (fallback an toàn) */
 } platform_wifi_auth_mode_t;
 
 /** Một mạng quan sát được trong kết quả quét (generic, không phải wifi_ap_record_t). */
