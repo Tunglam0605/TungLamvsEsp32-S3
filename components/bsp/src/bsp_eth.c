@@ -27,6 +27,8 @@
  */
 #include "bsp_eth.h"
 
+#include <string.h>
+
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
 #include "esp_check.h"
@@ -35,6 +37,7 @@
 #include "esp_eth_phy_w5500.h"
 #include "esp_event.h"
 #include "esp_log.h"
+#include "esp_mac.h"
 #include "esp_netif.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -52,6 +55,19 @@ static const char *TAG = "BSP_ETH";
 
 static esp_eth_handle_t s_eth_handle;
 static bool s_eth_has_ip;
+
+/*
+ * Validate the factory-derived address before exposing it to the LAN.  A
+ * zero or multicast address is invalid as a source MAC and would prevent a
+ * normal DHCP exchange on many managed switches.
+ */
+static bool eth_mac_is_valid(const uint8_t mac[6])
+{
+    static const uint8_t zero_mac[6] = {0};
+
+    return memcmp(mac, zero_mac, sizeof(zero_mac)) != 0 &&
+           (mac[0] & 0x01U) == 0;
+}
 
 /*
  * Xử lý sự kiện liên kết Ethernet:
@@ -166,6 +182,23 @@ esp_err_t bsp_eth_init(void)
     esp_eth_config_t eth_cfg = ETH_DEFAULT_CONFIG(mac, phy);
     ESP_RETURN_ON_ERROR(esp_eth_driver_install(&eth_cfg, &s_eth_handle), TAG,
                         "install W5500 driver");
+
+    /*
+     * W5500 has no factory MAC of its own.  ESP-IDF derives ESP_MAC_ETH from
+     * the ESP32-S3 factory base MAC; assign it before attaching/starting the
+     * driver so Ethernet never sends DHCP using 00:00:00:00:00:00.
+     */
+    uint8_t eth_mac[6] = {0};
+    ESP_RETURN_ON_ERROR(esp_read_mac(eth_mac, ESP_MAC_ETH), TAG, "read Ethernet MAC");
+    if (!eth_mac_is_valid(eth_mac)) {
+        ESP_LOGE(TAG, "invalid derived W5500 MAC: %02X:%02X:%02X:%02X:%02X:%02X",
+                 eth_mac[0], eth_mac[1], eth_mac[2], eth_mac[3], eth_mac[4], eth_mac[5]);
+        return ESP_ERR_INVALID_ARG;
+    }
+    ESP_RETURN_ON_ERROR(esp_eth_ioctl(s_eth_handle, ETH_CMD_S_MAC_ADDR, eth_mac), TAG,
+                        "set W5500 MAC");
+    ESP_LOGI(TAG, "W5500 MAC: %02X:%02X:%02X:%02X:%02X:%02X",
+             eth_mac[0], eth_mac[1], eth_mac[2], eth_mac[3], eth_mac[4], eth_mac[5]);
 
     /*
      * BƯỚC 6 — Gắn Ethernet vào esp-netif (tầng TCP/IP).
