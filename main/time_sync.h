@@ -6,7 +6,7 @@
 #define CALLBOX_TIME_SYNC_H
 
 #include <stdbool.h>
-#include "queues.h"
+#include "callbox_config.h"
 
 /** Bắt đầu SNTP nền (background). An toàn khi gọi nhiều lần. */
 void time_sync_init(void);

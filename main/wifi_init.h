@@ -32,7 +32,7 @@
 #define _WIFI_INIT_H_
 
 #include "esp_err.h"
-#include "queues.h"
+#include "callbox_config.h"
 
 /* Địa chỉ cố định của SoftAP khôi phục/cấu hình cục bộ. */
 #define CALLBOX_AP_IP_ADDR "192.168.65.204"

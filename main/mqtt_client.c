@@ -16,6 +16,7 @@
 #include "app_event_queue.h"
 #include "network_link.h"
 #include "protocol_types.h"
+#include "queues.h"
 #include "state_machine.h"
 #include "wifi_init.h"
 #include "time_sync.h"

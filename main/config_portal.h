@@ -23,7 +23,7 @@
 #define CALLBOX_CONFIG_PORTAL_H
 
 #include "esp_err.h"
-#include "queues.h"
+#include "callbox_config.h"
 #include <stdbool.h>
 
 #ifdef __cplusplus

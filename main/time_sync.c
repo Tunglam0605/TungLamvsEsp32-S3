@@ -20,6 +20,7 @@
 
 #include "esp_log.h"
 #include "platform_time.h"
+#include "queues.h"
 
 #include <time.h>
 

@@ -2,5 +2,10 @@ idf_component_register(SRCS "src/protocol_types.c"
                              "src/app_event_queue.c"
                              "src/status.c"
                              "src/button_gate.c"
+                             "src/callbox_config_store.c"
+                             "src/sequence_service.c"
+                             "src/sequence_store.c"
+                             "src/nvs_storage.c"
                     INCLUDE_DIRS "include"
-                    REQUIRES freertos)
+                    PRIV_INCLUDE_DIRS "private_include"
+                    REQUIRES freertos platform_nvs)

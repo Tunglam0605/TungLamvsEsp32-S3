@@ -41,7 +41,7 @@
 #define CALLBOX_MQTT_H
 
 #include "freertos/FreeRTOS.h"
-#include "queues.h"
+#include "callbox_config.h"
 #include <time.h>
 
 /* Chủ đề MQTT */
