@@ -34,7 +34,7 @@
  * @date    2026
  *
  * @see     queues.h — Config_t, LEDCmd_t, BuzzerCmd_t
- * @see     nvs_storage.c — load/save cấu hình
+ * @see     callbox_config_store.c — load/save cấu hình
  * @see     config_portal.c — portal cấu hình qua AP
  * @see     network_status_task.c — trạng thái LED/AP
  */
@@ -53,6 +53,7 @@
 #include "state_machine.h"
 #include "wifi_init.h"
 #include "nvs_storage.h"
+#include "callbox_config_store.h"
 #include "config_portal.h"
 #include "bsp_board.h"
 #include "bsp_eth.h"
@@ -97,7 +98,7 @@ Config_t g_config = {
 /* Nạp cấu hình đã lưu từ NVS; chấp nhận hồi phục factory khi thiếu */
 static void load_config_from_nvs(void)
 {
-    esp_err_t err = nvs_load_config(&g_config);
+    esp_err_t err = callbox_config_store_load(&g_config);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "Failed to load one or more saved configuration values: %s",
                  esp_err_to_name(err));

@@ -42,7 +42,7 @@
  *
  * @see     config_portal.h — API
  * @see     wifi_init.c — quét WiFi (wifi_scan_lock/unlock), áp cấu hình
- * @see     nvs_storage.c — lưu/đọc cấu hình
+ * @see     callbox_config_store.c — lưu/đọc cấu hình
  * @see     io_debug.c — trạng thái I/O cho /api/io-status
  */
 #include "config_portal.h"
@@ -64,7 +64,7 @@
 #include "callbox_io.h"
 #include "io_debug.h"
 #include "callbox_mqtt.h"
-#include "nvs_storage.h"
+#include "callbox_config_store.h"
 #include "status.h"
 #include "time_sync.h"
 #include "wifi_init.h"
@@ -733,7 +733,7 @@ static esp_err_t wifi_profile_delete_handler(httpd_req_t *req)
         return ESP_OK;
     }
     /* Lưu xuống NVS, rồi gắn lại bản đã cập nhật vào cấu hình chung */
-    esp_err_t err = nvs_save_config(&updated);
+    esp_err_t err = callbox_config_store_save(&updated);
     if (err != ESP_OK) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Could not save Wi-Fi profiles");
         return ESP_OK;
@@ -1364,7 +1364,7 @@ static esp_err_t save_handler(httpd_req_t *req)
     }
 
     /* Lưu toàn bộ cấu hình xuống NVS trước khi áp dụng */
-    esp_err_t err = nvs_save_config(&updated);
+    esp_err_t err = callbox_config_store_save(&updated);
     if (err != ESP_OK) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Could not save configuration");
         return ESP_OK;

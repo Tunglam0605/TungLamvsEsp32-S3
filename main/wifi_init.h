@@ -21,7 +21,7 @@
  * @date    2026
  *
  * @see     config_portal.h — web cấu hình trên AP
- * @see     nvs_storage.h — lưu profile Wi-Fi
+ * @see     callbox_config_store.h — lưu profile Wi-Fi
  * @see     mqtt_client.c — phụ thuộc vào network_is_connected()
  */
 #ifndef _WIFI_INIT_H_

@@ -11,7 +11,7 @@
 #include <stdint.h>
 #include "esp_err.h"
 
-/** Nạp high-watermark đã lưu. Gọi một lần sau nvs_storage_init(). */
+/** Nạp high-watermark đã lưu (qua sequence_store). Gọi một lần sau nvs_storage_init(). */
 esp_err_t sequence_service_init(void);
 
 /** Cấp phát và lưu bền vững số thứ tự sự kiện toàn thiết bị tiếp theo. */

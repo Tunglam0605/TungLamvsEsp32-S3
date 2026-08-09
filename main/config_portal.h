@@ -17,7 +17,7 @@
  * @date    2026
  *
  * @see     wifi_init.h — SoftAP và địa chỉ IP
- * @see     nvs_storage.h — lưu cấu hình người dùng
+ * @see     callbox_config_store.h — lưu cấu hình người dùng
  */
 #ifndef CALLBOX_CONFIG_PORTAL_H
 #define CALLBOX_CONFIG_PORTAL_H

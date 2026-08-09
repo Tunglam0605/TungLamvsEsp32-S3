@@ -10,7 +10,7 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
-#include "nvs_storage.h"
+#include "sequence_store.h"
 
 static const char *TAG = "SEQUENCE";
 static SemaphoreHandle_t s_lock;
@@ -24,7 +24,7 @@ esp_err_t sequence_service_init(void)
     s_lock = xSemaphoreCreateMutex();
     if (s_lock == NULL) return ESP_ERR_NO_MEM;
 
-    esp_err_t err = nvs_load_seq_num(&s_high_watermark);
+    esp_err_t err = sequence_store_load(&s_high_watermark);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Cannot load sequence high-watermark: %s", esp_err_to_name(err));
         return err;
@@ -48,7 +48,7 @@ esp_err_t sequence_next(uint32_t *sequence)
         const uint32_t candidate = s_high_watermark + 1U;
         /* Lưu trước khi phơi bày số: mất điện có thể bỏ qua một số, nhưng
          * không bao giờ khiến thiết bị tái sử dụng số đã cấp. */
-        err = nvs_save_seq_num(candidate);
+        err = sequence_store_save(candidate);
         if (err == ESP_OK) {
             s_high_watermark = candidate;
             *sequence = candidate;
