@@ -34,6 +34,7 @@
 #define BSP_ETH_H
 
 #include <stdbool.h>
+#include <stdint.h>
 #include "esp_err.h"
 
 #ifdef __cplusplus
@@ -41,8 +42,15 @@ extern "C" {
 #endif
 
 /* Gọi sau esp_netif_init() và esp_event_loop_create_default(). */
+typedef struct {
+    bool connected;      /* True only after an IP address is assigned. */
+    char ip[16];
+    char gateway[16];
+} bsp_eth_status_t;
+
 esp_err_t bsp_eth_init(void);
 bool bsp_eth_is_connected(void);
+void bsp_eth_get_status(bsp_eth_status_t *status);
 
 #ifdef __cplusplus
 }

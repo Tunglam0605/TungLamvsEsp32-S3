@@ -55,6 +55,8 @@ static const char *TAG = "BSP_ETH";
 
 static esp_eth_handle_t s_eth_handle;
 static bool s_eth_has_ip;
+static char s_eth_ip[16];
+static char s_eth_gateway[16];
 
 /*
  * Validate the factory-derived address before exposing it to the LAN.  A
@@ -81,6 +83,8 @@ static void eth_event_handler(void *arg, esp_event_base_t event_base,
         ESP_LOGI(TAG, "W5500 link up");
     } else if (event_id == ETHERNET_EVENT_DISCONNECTED) {
         s_eth_has_ip = false;
+        s_eth_ip[0] = '\0';
+        s_eth_gateway[0] = '\0';
         ESP_LOGW(TAG, "W5500 link down");
     }
 }
@@ -94,6 +98,8 @@ static void eth_got_ip_handler(void *arg, esp_event_base_t event_base,
 {
     ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
     s_eth_has_ip = true;
+    snprintf(s_eth_ip, sizeof(s_eth_ip), IPSTR, IP2STR(&event->ip_info.ip));
+    snprintf(s_eth_gateway, sizeof(s_eth_gateway), IPSTR, IP2STR(&event->ip_info.gw));
     ESP_LOGI(TAG, "W5500 got IP: " IPSTR, IP2STR(&event->ip_info.ip));
 }
 
@@ -232,4 +238,13 @@ esp_err_t bsp_eth_init(void)
 bool bsp_eth_is_connected(void)
 {
     return s_eth_has_ip;
+}
+
+void bsp_eth_get_status(bsp_eth_status_t *status)
+{
+    if (status == NULL) return;
+
+    status->connected = s_eth_has_ip;
+    snprintf(status->ip, sizeof(status->ip), "%s", s_eth_ip);
+    snprintf(status->gateway, sizeof(status->gateway), "%s", s_eth_gateway);
 }

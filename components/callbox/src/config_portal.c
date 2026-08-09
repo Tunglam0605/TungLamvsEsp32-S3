@@ -60,6 +60,7 @@
 #include "freertos/task.h"
 #include "lwip/inet.h"
 #include "lwip/sockets.h"
+#include "bsp_eth.h"
 #include "callbox_io.h"
 #include "io_debug.h"
 #include "callbox_mqtt.h"
@@ -615,11 +616,14 @@ static esp_err_t system_status_handler(httpd_req_t *req)
 
     wifi_sta_status_t sta;
     wifi_get_sta_status(&sta);
-    char ssid[96], ip[32], gateway[32], client_id[96];
+    bsp_eth_status_t eth;
+    bsp_eth_get_status(&eth);
+    char ssid[96], ip[32], gateway[32], eth_ip[32], client_id[96];
     char cmd_topic[128], event_topic[128], status_topic[128];
     json_escape(sta.ssid, ssid, sizeof(ssid));
     json_escape(sta.ip, ip, sizeof(ip));
     json_escape(sta.gateway, gateway, sizeof(gateway));
+    json_escape(eth.ip, eth_ip, sizeof(eth_ip));
     format_device_name(s_config->callbox_id, client_id, sizeof(client_id));
     snprintf(cmd_topic, sizeof(cmd_topic), MQTT_CMD_TOPIC "/#", s_config->callbox_id);
     snprintf(event_topic, sizeof(event_topic), MQTT_EVENT_TOPIC, s_config->callbox_id);
@@ -629,11 +633,13 @@ static esp_err_t system_status_handler(httpd_req_t *req)
     snprintf(response, sizeof(response),
              "{\"sta\":%u,\"ssid\":\"%s\",\"rssi\":%d,"
              "\"ip\":\"%s\",\"gateway\":\"%s\",\"mqtt\":%u,"
+             "\"eth\":%u,\"eth_ip\":\"%s\","
              "\"mqtt_transport\":\"%s\","
              "\"ap\":%u,\"client_id\":\"%s\","
              "\"topics\":{\"cmd\":\"%s\",\"event\":\"%s\",\"status\":\"%s\"}}",
              sta.connected ? 1U : 0U, ssid, (int)sta.rssi, ip, gateway,
              mqtt_is_connected() ? 1U : 0U,
+             eth.connected ? 1U : 0U, eth_ip,
              s_config->mqtt_transport == MQTT_TRANSPORT_TLS ? "tls" : "tcp",
              wifi_ap_is_active() ? 1U : 0U,
              client_id, cmd_topic, event_topic, status_topic);
@@ -1068,6 +1074,13 @@ static esp_err_t portal_page_handler_modern(httpd_req_t *req)
         "<script>(function(){const card=document.querySelector('.layout>.card');const name=document.querySelector('.hero .device-label');const live=document.querySelector('main>.live');if(card&&name){const value=name.querySelector('b');name.textContent='';const label=document.createElement('span');label.textContent='Tên thiết bị';name.append(label,value);name.className='identity-name';card.insertBefore(name,card.querySelector('.field'))}if(card&&live){live.classList.add('identity-status');card.append(live)}const mqttTitle=document.querySelector('.mqtt h2');if(mqttTitle){const note=document.createElement('span');note.className='mqtt-hint';note.textContent='Theo ID Callbox';mqttTitle.append(note)}document.querySelectorAll('.readout').forEach(e=>{e.setAttribute('aria-readonly','true');e.title='Tu sinh tu ID Callbox, khong the chinh sua'});const profiles=document.getElementById('profiles');const field=profiles&&profiles.closest('.field');if(field){const label=field.querySelector('label');if(label)label.remove();const details=document.createElement('details');details.className='wifi-manager';const summary=document.createElement('summary');summary.textContent='Qu\u1ea3n l\u00fd WiFi \u0111\u00e3 nh\u1edb';field.classList.add('wifi-manager-content');field.parentNode.insertBefore(details,field);details.append(summary,field)}})();</script>";
     static const char alignment_style[] =
         "<style>.identity-name{margin:14px 0 12px}.identity-status .live-item{display:flex;min-height:58px;flex-direction:column;justify-content:center;gap:2px}.identity-status .live-item small{line-height:1.2}.identity-status .live-item b{line-height:1.25}.mqtt h2{margin-bottom:16px}.mqtt-hint{margin-left:auto;padding:5px 9px;border:1px solid rgba(52,211,153,.28);border-radius:999px;background:rgba(52,211,153,.08);color:var(--green);font-size:11px;font-weight:600}.mqtt .topic-grid{align-items:end}.mqtt .topic-grid+.topic-grid{align-items:start}.mqtt .topic-grid+.topic-grid label:after{display:none}.mqtt .topic-grid+.topic-grid>div{min-width:0}.readout{display:flex;align-items:center;min-height:42px;padding:10px 12px;line-height:1.2}@media(max-width:767px){.mqtt-hint{padding:4px 7px;font-size:10px}.identity-status .live-item{min-height:54px}}</style>";
+    /* Ethernet is a separate physical uplink.  It occupies a full row in
+     * the identity status grid so its connection state and DHCP IP are both
+     * visible without making the two-column table uneven. */
+    static const char ethernet_status_style[] =
+        "<style>.identity-status .ethernet-status{grid-column:1 / -1;border-right:0;background:rgba(52,211,153,.04)}@media(max-width:767px){.identity-status .ethernet-status{grid-column:auto}}</style>";
+    static const char ethernet_status_script[] =
+        "<script>(function(){const live=document.querySelector('.live');if(!live)return;const item=document.createElement('div');item.className='live-item ethernet-status';item.innerHTML='<small>Ethernet / IP</small><b id=\"eth-state\">\u0110ang ki\u1ec3m tra...</b>';live.append(item);const refresh=async()=>{const e=document.getElementById('eth-state');if(!e)return;try{const x=await fetch('/api/status',{cache:'no-store'}).then(r=>{if(!r.ok)throw Error();return r.json()});e.textContent=x.eth?'\u0110\u00e3 k\u1ebft n\u1ed1i \u00b7 '+x.eth_ip:'Ch\u01b0a k\u1ebft n\u1ed1i';e.className=x.eth?'ok':'bad'}catch(_){e.textContent='Kh\u00f4ng \u0111\u1ecdc \u0111\u01b0\u1ee3c';e.className='bad'}};refresh();setInterval(refresh,3000)})();</script>";
     static const char vertical_layout_style[] =
         "<style>.wifi-top{align-items:end}.wifi-top>.btn{align-self:end;margin-top:0}@media(min-width:1024px){.layout{grid-template-columns:1fr}.layout>.card:nth-child(1){grid-column:1;grid-row:1}.layout>.card:nth-child(2){grid-column:1;grid-row:2}.layout>.card:nth-child(3){grid-column:1;grid-row:3}}@media(max-width:767px){.wifi-top>.btn{align-self:stretch}}</style>";
     static const char identity_id_style[] =
@@ -1082,9 +1095,11 @@ static esp_err_t portal_page_handler_modern(httpd_req_t *req)
     (void)page_insert_before("</head>", alignment_style);
     (void)page_insert_before("</head>", vertical_layout_style);
     (void)page_insert_before("</head>", identity_id_style);
+    (void)page_insert_before("</head>", ethernet_status_style);
     (void)page_insert_before("</head>", mqtt_security_style);
     (void)page_insert_before("</head>", sntp_style);
     (void)page_insert_before("</body>", identity_move_script);
+    (void)page_insert_before("</body>", ethernet_status_script);
     (void)page_insert_before("</body>", scan_collapse_script);
 
     /* Add the transport choice without disturbing the stable, compact MQTT
