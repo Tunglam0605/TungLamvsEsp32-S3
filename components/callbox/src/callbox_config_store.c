@@ -4,12 +4,12 @@
  *
  *          Module này là tầng product adapter cho cấu hình: sở hữu namespace
  *          "callbox", schema/key cấu hình, chính sách profile Wi-Fi và mọi
- *          migration (web_pass, legacy WiFi, mqtt_tls...). Mọi provider
+ *          migration schema (legacy WiFi, mqtt_tls...). Mọi provider
  *          mechanics đi qua platform_nvs.
  *
  *          ═══ MIGRATION (GIỮ NGUYÊN) ═══
  *          - key thiếu → giữ default caller đã đặt trong Config_t
- *          - web_pass thiếu → ghi config->web_password xuống + commit
+ *          - web_pass thiếu → giữ default để composition root migrate an toàn
  *          - mqtt_tls thiếu → giữ config->mqtt_transport (TCP/TLS)
  *          - wifi_profile_count == 0 nhưng wifi_ssid[0] → tạo profile từ mạng cũ
  *          - wifi_count > MAX_WIFI_PROFILES → clamp về MAX_WIFI_PROFILES
@@ -151,7 +151,6 @@ esp_err_t callbox_config_store_load(Config_t *config)
     /* Đọc lần lượt từng key; lỗi đầu tiên được giữ trong first_error */
     esp_err_t first_error = ESP_OK;
     esp_err_t item_err;
-    bool commit_web_password = false;
     item_err = nvs_get_string_if_present(&handle, CALLBOX_STORAGE_WIFI_SSID_KEY,
                                          config->wifi_ssid, sizeof(config->wifi_ssid));
     if (item_err != ESP_OK && first_error == ESP_OK) first_error = item_err;
@@ -197,17 +196,10 @@ esp_err_t callbox_config_store_load(Config_t *config)
                                          config->callbox_id, sizeof(config->callbox_id));
     if (item_err != ESP_OK && first_error == ESP_OK) first_error = item_err;
 
-    /* web_pass: nếu key chưa tồn tại (ESP_OK + !found) → ghi mặc định ngay
-     * (migrate bản cũ). Mặc định này do Config_t/caller cung cấp — không log.
-     * Lỗi khác (vd. INVALID_SIZE) chỉ được ghi vào first_error, KHÔNG ghi đè. */
-    size_t web_password_len = sizeof(config->web_password);
-    bool found_web_pass = false;
-    item_err = platform_nvs_get_string(&handle, CALLBOX_STORAGE_WEB_PASS_KEY,
-                                       config->web_password, web_password_len, &found_web_pass);
-    if (item_err == ESP_OK && !found_web_pass) {
-        item_err = platform_nvs_set_string(&handle, CALLBOX_STORAGE_WEB_PASS_KEY, config->web_password);
-        commit_web_password = item_err == ESP_OK;
-    }
+    /* Credential migration depends on the factory MAC and therefore belongs
+     * to callbox_app. A missing key simply preserves the caller's default. */
+    item_err = nvs_get_string_if_present(&handle, CALLBOX_STORAGE_WEB_PASS_KEY,
+                                         config->web_password, sizeof(config->web_password));
     if (item_err != ESP_OK && first_error == ESP_OK) first_error = item_err;
 
     bool found_port = false;
@@ -261,10 +253,6 @@ esp_err_t callbox_config_store_load(Config_t *config)
         config_add_wifi_profile(config, config->wifi_ssid, config->wifi_pass);
     }
 
-    if (commit_web_password) {
-        item_err = platform_nvs_commit(&handle);
-        if (item_err != ESP_OK && first_error == ESP_OK) first_error = item_err;
-    }
     platform_nvs_close(&handle);
     ESP_LOGI(TAG, "Configuration loaded: callbox=%s broker=%s:%u WiFi=%s",
              config->callbox_id, config->mqtt_broker, config->mqtt_port,

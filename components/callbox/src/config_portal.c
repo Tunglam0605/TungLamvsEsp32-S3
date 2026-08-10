@@ -26,9 +26,9 @@
  *          │ POST /api/session/finish    │ Kết thúc phiên (đóng AP)    │
  *          └─────────────────────────────┴──────────────────────────────┘
  *
- *          Phân quyền: mọi yêu cầu từ mạng AP (192.168.65.0/24) được truy
- *          cập tự do; yêu cầu từ mạng STA (nhà máy) cần cookie đăng nhập
- *          (admin / web_password) hết hạn sau PORTAL_AUTH_TIMEOUT_MS.
+ *          Phân quyền: mọi yêu cầu từ AP cấu hình và mạng STA đều cần cookie
+ *          đăng nhập (admin / web_password), hết hạn sau
+ *          PORTAL_AUTH_TIMEOUT_MS.
  *          Phiên cấu hình giữ AP mở tối đa PORTAL_SESSION_TIMEOUT_MS kể từ
  *          lần tương tác cuối; sau đó AP có thể tự tắt (network_status_task).
  *
@@ -46,6 +46,8 @@
  * @see     io_debug.c — trạng thái I/O cho /api/io-status
  */
 #include "config_portal.h"
+#include "sdkconfig.h"
+#include <ctype.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -130,9 +132,25 @@ static volatile TickType_t s_session_deadline;
 #define PORTAL_AUTH_TIMEOUT_MS (30U * 60U * 1000U)
 #define PORTAL_STA_USERNAME "admin"
 #define PORTAL_AUTH_COOKIE "cb_auth"
+#define PORTAL_LOGIN_RATE_SLOTS 4
+#define PORTAL_LOGIN_MAX_FAILURES 5
+#define PORTAL_LOGIN_WINDOW_MS 60000U
+#define PORTAL_LOGIN_LOCKOUT_MS 60000U
 /* Token ngẫu nhiên 32 ký tự xác thực cookie (sinh tại mỗi lần đăng nhập) */
 static char s_auth_token[33];
 static volatile TickType_t s_auth_deadline;
+
+typedef struct {
+    bool used;
+    bool window_active;
+    uint32_t peer_address;
+    uint8_t failures;
+    TickType_t window_started;
+    TickType_t blocked_until;
+    TickType_t last_seen;
+} portal_login_rate_t;
+
+static portal_login_rate_t s_login_rates[PORTAL_LOGIN_RATE_SLOTS];
 
 /* Logo công ty nhúng trong firmware, phục vụ như một asset tĩnh nhỏ. */
 extern const uint8_t _binary_company_logo_transparent_png_start[];
@@ -153,6 +171,42 @@ static bool valid_numeric_callbox_id(const char *value)
         if (*p < '0' || *p > '9') return false;
     }
     return true;
+}
+
+static bool valid_portal_password(const char *value)
+{
+    if (!value) return false;
+    const size_t length = strlen(value);
+    if (length < 12 || length >= sizeof(s_config->web_password)) return false;
+
+    bool has_upper = false;
+    bool has_lower = false;
+    bool has_digit = false;
+    bool has_special = false;
+    for (size_t i = 0; i < length; ++i) {
+        const unsigned char c = (unsigned char)value[i];
+        if (c < 0x21U || c > 0x7eU) return false;
+        if (isupper(c)) has_upper = true;
+        else if (islower(c)) has_lower = true;
+        else if (isdigit(c)) has_digit = true;
+        else has_special = true;
+    }
+    return has_upper && has_lower && has_digit && has_special;
+}
+
+static bool constant_time_password_equal(const char *provided, const char *expected)
+{
+    if (!provided || !expected) return false;
+    const size_t provided_len = strlen(provided);
+    const size_t expected_len = strlen(expected);
+    const size_t compare_len = provided_len > expected_len ? provided_len : expected_len;
+    unsigned int difference = (unsigned int)(provided_len ^ expected_len);
+    for (size_t i = 0; i < compare_len; ++i) {
+        const unsigned char left = i < provided_len ? (unsigned char)provided[i] : 0U;
+        const unsigned char right = i < expected_len ? (unsigned char)expected[i] : 0U;
+        difference |= (unsigned int)(left ^ right);
+    }
+    return difference == 0U;
 }
 
 /* Đầu vào host NTP cố tình giới hạn: chỉ IPv4 hoặc hostname DNS. */
@@ -224,7 +278,7 @@ static void play_config_saved_tone(void)
 /* Giữ markup fallback/kế thừa và trang tiếng Việt đang hoạt động trên một URL AP.
  * Thay thế mọi chuỗi IP cũ 192.168.4.1 trong HTML bằng CALLBOX_AP_IP_ADDR
  * (192.168.65.204) — giúp 1 trang phục vụ cả bản mới lẫn markup kế thừa. */
-static void replace_legacy_ap_ip(void)
+static void __attribute__((unused)) replace_legacy_ap_ip(void)
 {
     static const char old_ip[] = "192.168.4.1";
     const size_t old_len = sizeof(old_ip) - 1U;
@@ -380,6 +434,88 @@ static bool request_peer_ipv4(httpd_req_t *req, uint32_t *address)
     return true;
 }
 
+static portal_login_rate_t *login_rate_slot(uint32_t peer_address, bool create)
+{
+    const TickType_t now = xTaskGetTickCount();
+    size_t replacement = 0;
+    TickType_t oldest_age = 0;
+
+    for (size_t i = 0; i < PORTAL_LOGIN_RATE_SLOTS; ++i) {
+        if (s_login_rates[i].used &&
+            s_login_rates[i].peer_address == peer_address) {
+            return &s_login_rates[i];
+        }
+        if (!s_login_rates[i].used) {
+            replacement = i;
+            oldest_age = UINT32_MAX;
+            continue;
+        }
+        const TickType_t age = now - s_login_rates[i].last_seen;
+        if (oldest_age != UINT32_MAX && age >= oldest_age) {
+            oldest_age = age;
+            replacement = i;
+        }
+    }
+    if (!create) return NULL;
+
+    memset(&s_login_rates[replacement], 0, sizeof(s_login_rates[replacement]));
+    s_login_rates[replacement].used = true;
+    s_login_rates[replacement].peer_address = peer_address;
+    s_login_rates[replacement].last_seen = now;
+    return &s_login_rates[replacement];
+}
+
+static bool login_rate_is_blocked(uint32_t peer_address, uint32_t *retry_after_seconds)
+{
+    portal_login_rate_t *rate = login_rate_slot(peer_address, false);
+    if (!rate) return false;
+
+    const TickType_t now = xTaskGetTickCount();
+    rate->last_seen = now;
+    if (rate->blocked_until != 0 &&
+        (int32_t)(rate->blocked_until - now) > 0) {
+        if (retry_after_seconds) {
+            const TickType_t remaining = rate->blocked_until - now;
+            *retry_after_seconds =
+                ((uint32_t)remaining * (uint32_t)portTICK_PERIOD_MS + 999U) / 1000U;
+            if (*retry_after_seconds == 0) *retry_after_seconds = 1;
+        }
+        return true;
+    }
+    rate->blocked_until = 0;
+    if (rate->window_active &&
+        now - rate->window_started >= pdMS_TO_TICKS(PORTAL_LOGIN_WINDOW_MS)) {
+        rate->window_active = false;
+        rate->failures = 0;
+    }
+    return false;
+}
+
+static bool login_rate_note_failure(uint32_t peer_address)
+{
+    portal_login_rate_t *rate = login_rate_slot(peer_address, true);
+    const TickType_t now = xTaskGetTickCount();
+    rate->last_seen = now;
+    if (!rate->window_active ||
+        now - rate->window_started >= pdMS_TO_TICKS(PORTAL_LOGIN_WINDOW_MS)) {
+        rate->window_active = true;
+        rate->window_started = now;
+        rate->failures = 0;
+    }
+    if (++rate->failures < PORTAL_LOGIN_MAX_FAILURES) return false;
+
+    rate->failures = 0;
+    rate->window_active = false;
+    rate->blocked_until = now + pdMS_TO_TICKS(PORTAL_LOGIN_LOCKOUT_MS);
+    return true;
+}
+
+static void login_rate_clear(uint32_t peer_address)
+{
+    portal_login_rate_t *rate = login_rate_slot(peer_address, false);
+    if (rate) memset(rate, 0, sizeof(*rate));
+}
+
 /* Xác định request đến từ mạng AP cấu hình hay không:
  *   - Nếu socket cục bộ gắn đúng IP của AP (CALLBOX_AP_IP_ADDR) → AP.
  *   - Fallback: peer IP thuộc dải 192.168.65.0/24 (C0A84900) — dùng cho
@@ -466,6 +602,17 @@ static esp_err_t send_login_page(httpd_req_t *req, const char *error)
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     return httpd_resp_send(req, page, HTTPD_RESP_USE_STRLEN);
+}
+
+static esp_err_t send_login_rate_limit_page(httpd_req_t *req, uint32_t retry_after_seconds)
+{
+    char retry_after[12];
+    snprintf(retry_after, sizeof(retry_after), "%lu",
+             (unsigned long)(retry_after_seconds ? retry_after_seconds : 60U));
+    httpd_resp_set_status(req, "429 Too Many Requests");
+    httpd_resp_set_hdr(req, "Retry-After", retry_after);
+    return send_login_page(
+        req, "<p class='error'>Qua nhieu lan dang nhap. Vui long thu lai sau.</p>");
 }
 
 /* GET /api/wifi-scan — quét WiFi và trả danh sách mạng dạng JSON.
@@ -845,6 +992,10 @@ bool config_portal_session_active(void)
     return (int32_t)(deadline - xTaskGetTickCount()) > 0;
 }
 
+/* Legacy portal renderers retained temporarily for source history only. The
+ * active root route uses portal_page_handler_modern() below. Excluding these
+ * obsolete HTML payloads avoids both dead code and unused-handler warnings. */
+#if 0
 /* (Không dùng trực tiếp) Trang cấu hình chính — bản HTML nhúng Tiếng Việt.
  * Dựng danh sách giá trị đã HTML-escape từ cấu hình rồi đổ vào template. */
 static esp_err_t portal_page_handler(httpd_req_t *req)
@@ -1061,6 +1212,8 @@ static esp_err_t portal_page_handler_vi(httpd_req_t *req)
  * the layout difficult to maintain and could briefly show a stale layout.
  * Trang cấu hình CHÍNH được dùng từ root_handler; giữ mọi thứ trong một
  * template để dễ bảo trì và không có hiệu ứng layout cũ. */
+#endif
+
 static esp_err_t portal_page_handler_modern(httpd_req_t *req)
 {
     char callbox[64], device_name[96], ssid[96], broker[128], user[64];
@@ -1115,6 +1268,10 @@ static esp_err_t portal_page_handler_modern(httpd_req_t *req)
         "<style>.mqtt-security{display:flex;align-items:end;gap:14px;margin:0 0 2px}.mqtt-security .field{width:min(340px,100%%);margin:0}.mqtt-security span{max-width:540px;padding-bottom:11px;color:var(--muted);font-size:12px}@media(max-width:767px){.mqtt-security{display:block}.mqtt-security .field{width:100%%}.mqtt-security span{display:block;padding:8px 0 0}}</style>";
     static const char sntp_style[] =
         "<style>.sntp-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:12px 0}.sntp-row .field{margin:0}@media(max-width:767px){.sntp-row{grid-template-columns:1fr}}</style>";
+    static const char portal_security_style[] =
+        "<style>.layout>.card:first-child>.portal-password-field{display:block;min-height:0;margin:14px 0 0;padding:0;border:0;background:transparent;box-shadow:none}.layout>.card:first-child>.portal-password-field label{display:block;margin:0 0 6px}.layout>.card:first-child>.portal-password-field input{width:100%;min-height:44px;padding:9px 12px;border:1px solid var(--line2);border-radius:8px;background:var(--surface2);color:var(--text);text-align:left}.layout>.card:first-child>.portal-password-field:focus-within{border:0;box-shadow:none}.layout>.card:first-child>.portal-password-field input:focus-visible{outline:3px solid rgba(52,211,153,.18);border-color:var(--green)}</style>";
+    static const char portal_security_script[] =
+        "<script>(function(){const card=document.querySelector('.layout>.card:first-child');if(!card)return;const field=document.createElement('div');field.className='field portal-password-field';field.innerHTML=\"<label for='web_password'>M&#x1EAD;t kh&#x1EA9;u portal m&#x1EDB;i</label><input id='web_password' name='web_password' type='password' minlength='12' maxlength='63' autocomplete='new-password' placeholder='&#x110;&#x1EC3; tr&#x1ED1;ng &#x0111;&#x1EC3; gi&#x1EEF; nguy&#xEA;n' title='T&#x1ED1;i thi&#x1EC3;u 12 k&#xFD; t&#x1EF1;, g&#x1ED3;m ch&#x1EEF; hoa, ch&#x1EEF; th&#x1B0;&#x1EDD;ng, s&#x1ED1; v&#xE0; k&#xFD; t&#x1EF1; &#x111;&#x1EB7;c bi&#x1EC7;t'>\";const status=card.querySelector('.identity-status');card.insertBefore(field,status||null)})();</script>";
     (void)page_insert_before("</head>", identity_style);
     (void)page_insert_before("</head>", alignment_style);
     (void)page_insert_before("</head>", vertical_layout_style);
@@ -1122,15 +1279,17 @@ static esp_err_t portal_page_handler_modern(httpd_req_t *req)
     (void)page_insert_before("</head>", ethernet_status_style);
     (void)page_insert_before("</head>", mqtt_security_style);
     (void)page_insert_before("</head>", sntp_style);
+    (void)page_insert_before("</head>", portal_security_style);
     (void)page_insert_before("</body>", identity_move_script);
     (void)page_insert_before("</body>", ethernet_status_script);
     (void)page_insert_before("</body>", scan_collapse_script);
+    (void)page_insert_before("</body>", portal_security_script);
 
     /* Add the transport choice without disturbing the stable, compact MQTT
      * field grid. The select remains a normal form element and is saved by
      * the existing FormData code. */
     snprintf(s_mqtt_security_script, sizeof(s_mqtt_security_script),
-             "<script>(function(){const grid=document.querySelector('.mqtt .topic-grid');if(!grid)return;const userLabel=document.querySelector('label[for=mqtt_user]'),passLabel=document.querySelector('label[for=mqtt_pass]'),pass=document.getElementById('mqtt_pass'),saved=%s;if(userLabel)userLabel.innerHTML='T&#xE0;i kho&#x1EA3;n MQTT (broker)';if(passLabel)passLabel.innerHTML='M&#x1EAD;t kh&#x1EA9;u MQTT (broker)';if(pass){pass.placeholder='\\u0110\\u1ec3 tr\\u1ed1ng \\u0111\\u1ec3 kh\\u00f4ng d\\u00f9ng m\\u1eadt kh\\u1ea9u';if(saved){pass.value='__CB_KEEP__';pass.addEventListener('focus',()=>{if(pass.value==='__CB_KEEP__')pass.value=''},{once:true})}}const row=document.createElement('div');row.className='mqtt-security';row.innerHTML=\"<div class='field'><label for='mqtt_transport'>B&#x1EA3;o m&#x1EAD;t k&#x1EBF;t n&#x1ED1;i</label><select id='mqtt_transport' name='mqtt_transport'><option value='tcp' %s>TCP - broker n&#x1ED9;i b&#x1ED9;</option><option value='tls' %s>TLS - Cloud / Internet</option></select></div>\";grid.parentNode.insertBefore(row,grid)})();</script>",
+             "<script>(function(){const grid=document.querySelector('.mqtt .topic-grid');if(!grid)return;const userLabel=document.querySelector('label[for=mqtt_user]'),passLabel=document.querySelector('label[for=mqtt_pass]'),pass=document.getElementById('mqtt_pass'),saved=%s;if(userLabel)userLabel.innerHTML='T&#xE0;i kho&#x1EA3;n MQTT (broker)';if(passLabel)passLabel.innerHTML='M&#x1EAD;t kh&#x1EA9;u MQTT (broker)';if(pass){pass.placeholder='Nh\\u1eadp m\\u1eadt kh\\u1ea9u broker';if(saved){pass.value='__CB_KEEP__';pass.addEventListener('focus',()=>{if(pass.value==='__CB_KEEP__')pass.value=''},{once:true})}}const row=document.createElement('div');row.className='mqtt-security';row.innerHTML=\"<div class='field'><label for='mqtt_transport'>B&#x1EA3;o m&#x1EAD;t k&#x1EBF;t n&#x1ED1;i</label><select id='mqtt_transport' name='mqtt_transport'><option value='tcp' %s>TCP - broker n&#x1ED9;i b&#x1ED9;</option><option value='tls' %s>TLS - Cloud / Internet</option></select></div>\";grid.parentNode.insertBefore(row,grid)})();</script>",
              s_config->mqtt_pass[0] ? "true" : "false",
              s_config->mqtt_transport == MQTT_TRANSPORT_TCP ? "selected" : "",
              s_config->mqtt_transport == MQTT_TRANSPORT_TLS ? "selected" : "");
@@ -1179,7 +1338,18 @@ static esp_err_t root_handler(httpd_req_t *req)
  * gắn cookie 'cb_auth' hết hạn 30 phút, sau đó redirect về /. */
 static esp_err_t login_handler(httpd_req_t *req)
 {
+    uint32_t peer_address = 0;
+    (void)request_peer_ipv4(req, &peer_address);
+    uint32_t retry_after_seconds = 0;
+    if (login_rate_is_blocked(peer_address, &retry_after_seconds)) {
+        ESP_LOGW(TAG, "Portal login rate-limited");
+        return send_login_rate_limit_page(req, retry_after_seconds);
+    }
+
     if (req->content_len == 0 || req->content_len >= 256) {
+        if (login_rate_note_failure(peer_address)) {
+            return send_login_rate_limit_page(req, PORTAL_LOGIN_LOCKOUT_MS / 1000U);
+        }
         return send_login_page(req, "<p class='error'>Du lieu dang nhap khong hop le.</p>");
     }
 
@@ -1188,19 +1358,27 @@ static esp_err_t login_handler(httpd_req_t *req)
         return send_login_page(req, "<p class='error'>Het thoi gian doc du lieu dang nhap.</p>");
     }
 
-    /* Trích username + password từ form; tách riêng 2 điều kiện để log rõ
-     * phần nào sai (giúp kỹ thuật viên debug). */
+    /* Không log phần credential nào sai; phản hồi thống nhất tránh tạo
+     * username/password oracle qua log vận hành. */
     char username[32] = { 0 };
     char password[64] = { 0 };
     const bool form_ok = form_value(body, "username", username, sizeof(username)) &&
                          form_value(body, "password", password, sizeof(password));
     const bool user_ok = form_ok && strcmp(username, PORTAL_STA_USERNAME) == 0;
     const bool password_ok = form_ok && s_config &&
-                             strcmp(password, s_config->web_password) == 0;
+                             constant_time_password_equal(password, s_config->web_password);
     if (!user_ok || !password_ok) {
-        ESP_LOGW(TAG, "Portal login rejected (user=%d password=%d)", user_ok, password_ok);
+        memset(password, 0, sizeof(password));
+        memset(body, 0, sizeof(body));
+        ESP_LOGW(TAG, "Portal login rejected");
+        if (login_rate_note_failure(peer_address)) {
+            return send_login_rate_limit_page(req, PORTAL_LOGIN_LOCKOUT_MS / 1000U);
+        }
         return send_login_page(req, "<p class='error'>Sai tai khoan hoac mat khau.</p>");
     }
+    memset(password, 0, sizeof(password));
+    memset(body, 0, sizeof(body));
+    login_rate_clear(peer_address);
 
     /* Đăng nhập thành công: sinh token 32 hex ngẫu nhiên (esp_random ×4)
      * và đặt hạn cookie 30 phút (PORTAL_AUTH_TIMEOUT_MS). */
@@ -1223,8 +1401,7 @@ static esp_err_t login_handler(httpd_req_t *req)
 }
 
 /* POST /save — nhận form cấu hình từ trang portal, chuẩn hóa & lưu.
- * Áp dụng trực tiếp WiFi mới (không reboot); đồng thời lưu xuống NVS.
- * Lưu ý: đoạn mã sau return (ESP_OK) là mã rác cũ (không bao giờ chạy). */
+ * Áp dụng trực tiếp WiFi mới (không reboot); đồng thời lưu xuống NVS. */
 static esp_err_t save_handler(httpd_req_t *req)
 {
     if (!require_portal_access(req)) return ESP_OK;
@@ -1254,6 +1431,18 @@ static esp_err_t save_handler(httpd_req_t *req)
         }
         strncpy(updated.callbox_id, value, sizeof(updated.callbox_id) - 1);
         updated.callbox_id[sizeof(updated.callbox_id) - 1] = '\0';
+    }
+    if (form_value(body, "web_password", value, sizeof(value)) && value[0]) {
+        if (!valid_portal_password(value)) {
+            memset(value, 0, sizeof(value));
+            httpd_resp_send_err(
+                req, HTTPD_400_BAD_REQUEST,
+                "Portal password needs 12+ printable characters with upper, lower, digit and special");
+            return ESP_OK;
+        }
+        strncpy(updated.web_password, value, sizeof(updated.web_password) - 1);
+        updated.web_password[sizeof(updated.web_password) - 1] = '\0';
+        memset(value, 0, sizeof(value));
     }
     /* Xử lý WiFi: nếu nhập mật khẩu mới → dùng luôn; nếu để trống →
      * tái sử dụng mật khẩu của mạng đã nhớ (hoặc mạng đang dùng) */
@@ -1357,6 +1546,16 @@ static esp_err_t save_handler(httpd_req_t *req)
         strncpy(updated.mqtt_pass, value, sizeof(updated.mqtt_pass) - 1);
         updated.mqtt_pass[sizeof(updated.mqtt_pass) - 1] = '\0';
     }
+#if !defined(CONFIG_CALLBOX_ALLOW_ANONYMOUS_MQTT) || !CONFIG_CALLBOX_ALLOW_ANONYMOUS_MQTT
+    if (!updated.mqtt_user[0] || !updated.mqtt_pass[0]) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                            "MQTT username and password are required");
+        return ESP_OK;
+    }
+#endif
+    memset(value, 0, sizeof(value));
+    memset(wifi_password, 0, sizeof(wifi_password));
+    memset(body, 0, sizeof(body));
 
     /* Lưu toàn bộ cấu hình xuống NVS trước khi áp dụng */
     esp_err_t err = callbox_config_store_save(&updated);
@@ -1370,6 +1569,8 @@ static esp_err_t save_handler(httpd_req_t *req)
     *s_config = updated;
     const bool wifi_changed = wifi_runtime_config_changed(&previous, &updated);
     const bool mqtt_changed = mqtt_runtime_config_changed(&previous, &updated);
+    const bool portal_password_changed =
+        strcmp(previous.web_password, updated.web_password) != 0;
     if (wifi_changed) {
         esp_err_t apply_err = wifi_apply_config(&updated);
         if (apply_err != ESP_OK) {
@@ -1391,15 +1592,22 @@ static esp_err_t save_handler(httpd_req_t *req)
     }
     play_config_saved_tone();
     httpd_resp_set_type(req, "text/plain; charset=utf-8");
-    httpd_resp_set_hdr(req, "Connection", "keep-alive");
-    httpd_resp_sendstr(req,
-                       "Da luu cau hinh. WiFi dang duoc ap dung; AP van san sang."
-                       " Hay bam Ket thuc cai dat khi hoan tat.");
-    return ESP_OK;
-    httpd_resp_sendstr(req, "<html><body><h2>Ã„ÂÃƒÂ£ lÃ†Â°u cÃ¡ÂºÂ¥u hÃƒÂ¬nh</h2><p>Callbox Ã„â€˜ang khÃ¡Â»Å¸i Ã„â€˜Ã¡Â»â„¢ng lÃ¡ÂºÂ¡i...</p></body></html>");
-    vTaskDelay(pdMS_TO_TICKS(800));
-    esp_restart();
-    return ESP_OK;
+    httpd_resp_set_hdr(req, "Connection", portal_password_changed ? "close" : "keep-alive");
+    if (portal_password_changed) {
+        httpd_resp_set_hdr(req, "Set-Cookie",
+                           PORTAL_AUTH_COOKIE "=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict");
+    }
+    const esp_err_t response_err = httpd_resp_sendstr(
+        req, portal_password_changed
+                 ? "Da luu cau hinh. Mat khau portal da thay doi; tai lai trang de dang nhap."
+                 : "Da luu cau hinh. WiFi dang duoc ap dung; AP van san sang."
+                   " Hay bam Ket thuc cai dat khi hoan tat.");
+    if (portal_password_changed) {
+        memset(s_auth_token, 0, sizeof(s_auth_token));
+        s_auth_deadline = 0;
+        ESP_LOGI(TAG, "Portal password changed; existing login session invalidated");
+    }
+    return response_err;
 }
 
 /* Khởi động HTTP server portal (nếu chưa chạy) và đăng ký toàn bộ route.

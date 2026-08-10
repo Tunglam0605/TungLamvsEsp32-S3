@@ -13,6 +13,7 @@
  */
 #include "callbox_mqtt.h"
 
+#include "sdkconfig.h"
 #include "esp_crt_bundle.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -52,6 +53,7 @@ static SemaphoreHandle_t s_client_mutex;
 static volatile bool s_mqtt_connected;
 static volatile bool s_client_started;
 static QueueHandle_t s_publish_queue;
+static bool s_auth_config_error_logged;
 
 /* Sao chép giới hạn, luôn kết thúc '\0'. Không lưu con trỏ vào caller. */
 static void mqtt_copy_string(char *dst, size_t dst_size, const char *src)
@@ -69,6 +71,16 @@ static void mqtt_copy_runtime_config(const Config_t *config)
     mqtt_copy_string(s_config.user, sizeof(s_config.user), config->mqtt_user);
     mqtt_copy_string(s_config.pass, sizeof(s_config.pass), config->mqtt_pass);
     mqtt_copy_string(s_config.callbox_id, sizeof(s_config.callbox_id), config->callbox_id);
+    s_auth_config_error_logged = false;
+}
+
+static bool mqtt_credentials_allowed(void)
+{
+#if defined(CONFIG_CALLBOX_ALLOW_ANONYMOUS_MQTT) && CONFIG_CALLBOX_ALLOW_ANONYMOUS_MQTT
+    return true;
+#else
+    return s_config.user[0] != '\0' && s_config.pass[0] != '\0';
+#endif
 }
 
 static void mqtt_publish_worker(void *pvParameters)
@@ -274,6 +286,13 @@ void mqtt_client_connect(void)
 {
     if (!s_client_mutex || !network_link_is_connected() ||
         !s_config.broker[0] || s_config.port == 0) {
+        return;
+    }
+    if (!mqtt_credentials_allowed()) {
+        if (!s_auth_config_error_logged) {
+            ESP_LOGE(TAG, "MQTT connection blocked: username and password are required");
+            s_auth_config_error_logged = true;
+        }
         return;
     }
     if (s_config.transport == MQTT_TRANSPORT_TLS && !time_sync_is_valid()) {

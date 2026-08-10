@@ -28,6 +28,12 @@ static uint32_t s_cancel_hold_started_ms;
 
 static void begin_wcs_sync(void);
 
+typedef enum {
+    TRANSITION_REJECT = 0,
+    TRANSITION_NOOP,
+    TRANSITION_APPLY,
+} transition_decision_t;
+
 static uint32_t mission_now_ms(void)
 {
     return (uint32_t)(esp_timer_get_time() / 1000ULL);
@@ -62,16 +68,51 @@ const char *get_comm_state_str(void)
     }
 }
 
+static bool task_state_is_active(TaskState_t state)
+{
+    return state == TASK_QUEUED || state == TASK_ASSIGNED || state == TASK_LOCKED;
+}
+
+/* Pure transition policy. Correlation is checked separately before this
+ * function, so an old command can never revive a terminal mission. */
+static transition_decision_t transition_policy(protocol_command_type_t command,
+                                               TaskState_t current,
+                                               bool call_pending)
+{
+    switch (command) {
+    case PROTOCOL_CMD_ACCEPTED:
+        if (current == TASK_QUEUED) return TRANSITION_NOOP;
+        return current == TASK_IDLE && call_pending ? TRANSITION_APPLY : TRANSITION_REJECT;
+    case PROTOCOL_CMD_ASSIGNED:
+        if (current == TASK_ASSIGNED) return TRANSITION_NOOP;
+        return current == TASK_QUEUED ? TRANSITION_APPLY : TRANSITION_REJECT;
+    case PROTOCOL_CMD_LOCKED:
+        if (current == TASK_LOCKED) return TRANSITION_NOOP;
+        return current == TASK_QUEUED || current == TASK_ASSIGNED
+                   ? TRANSITION_APPLY : TRANSITION_REJECT;
+    case PROTOCOL_CMD_COMPLETED:
+        if (current == TASK_COMPLETED) return TRANSITION_NOOP;
+        return task_state_is_active(current) ? TRANSITION_APPLY : TRANSITION_REJECT;
+    case PROTOCOL_CMD_OVERDUE:
+        return task_state_is_active(current) ? TRANSITION_APPLY : TRANSITION_REJECT;
+    default:
+        return TRANSITION_REJECT;
+    }
+}
+
 static void mission_set_state(int task_id, TaskState_t state, uint32_t timestamp)
 {
     status_set_mission(task_id, state, timestamp);
     if (state == TASK_IDLE) {
+        status_clear_call(task_id);
+        status.CallSequence[task_id - 1] = 0;
         memset(s_agv_id[task_id - 1], 0, sizeof(s_agv_id[0]));
+        if (status.Cancel.pending && status.CancelTarget == (uint8_t)task_id) {
+            status_clear_cancel();
+        }
     }
     ESP_LOGI(TAG, "Task %d -> %s", task_id, state_name(state));
 }
-
-void reset_task(int task_id) { mission_set_state(task_id, TASK_IDLE, 0); }
 
 static bool task_cancelable(int task_id)
 {
@@ -131,16 +172,6 @@ static bool command_matches_call(int task_id, uint32_t ref_seq)
            status.CallSequence[task_id - 1] == ref_seq;
 }
 
-void handle_mqtt_command(const char *cmd, int task, const char *agv_id, uint32_t timestamp)
-{
-    if (!cmd || task < 1 || task > 2) return;
-    /* API tương thích; điểm vào Phase 4 dùng app_event_t bên dưới với
-     * ref_seq. */
-    (void)agv_id;
-    ESP_LOGW(TAG, "Legacy MQTT command ignored without ref_seq: %s", cmd);
-    (void)timestamp;
-}
-
 static void handle_wcs_command(const protocol_command_t *cmd)
 {
     const int task = cmd->task;
@@ -150,18 +181,28 @@ static void handle_wcs_command(const protocol_command_t *cmd)
             return;
         }
         for (int i = 0; i < 2; ++i) {
+            if (task_state_is_active(cmd->sync_state[i]) && cmd->sync_call_seq[i] == 0) {
+                ESP_LOGW(TAG, "Ignoring unsafe sync: active task %d has no call sequence",
+                         i + 1);
+                return;
+            }
+        }
+        for (int i = 0; i < 2; ++i) {
             const int sync_task = i + 1;
+            const TaskState_t sync_state = cmd->sync_state[i] == TASK_COMPLETED
+                                               ? TASK_IDLE : cmd->sync_state[i];
             status_clear_call(sync_task);
             status.CallSequence[i] = cmd->sync_call_seq[i];
             strncpy(s_agv_id[i], cmd->sync_agv_id[i], sizeof(s_agv_id[i]) - 1);
             s_agv_id[i][sizeof(s_agv_id[i]) - 1] = '\0';
-            mission_set_state(sync_task, cmd->sync_state[i], cmd->timestamp);
+            mission_set_state(sync_task, sync_state, cmd->timestamp);
         }
         status_clear_cancel();
         status_set_tower_warning(0, TOWER_WARNING_NONE);
         memset(&s_sync_transaction, 0, sizeof(s_sync_transaction));
+        s_sync_sequence = 0;
         status_set_comm_state(COMM_READY);
-        ESP_LOGI(TAG, "WCS sync accepted seq=%lu; Callbox ready", (unsigned long)s_sync_sequence);
+        ESP_LOGI(TAG, "WCS sync accepted; Callbox ready");
         return;
     }
     if (task < 1 || task > 2) return;
@@ -210,7 +251,6 @@ static void handle_wcs_command(const protocol_command_t *cmd)
             return;
         }
 
-        status_clear_call(task);
         mission_set_state(task, TASK_IDLE, cmd->timestamp);
         status_set_tower_warning(task, TOWER_WARNING_ERROR);
         status_set_task_error(task, mission_now_ms() + TASK_REJECT_FLASH_WINDOW_MS);
@@ -228,8 +268,21 @@ static void handle_wcs_command(const protocol_command_t *cmd)
         ESP_LOGW(TAG, "Ignoring stale WCS cmd task=%d ref=%lu", task, (unsigned long)cmd->ref_seq);
         return;
     }
+    const TaskState_t current = get_task_state(task);
+    const transition_decision_t decision = transition_policy(
+        cmd->type, current, status.Call[task - 1].pending);
+    if (decision == TRANSITION_NOOP) {
+        ESP_LOGI(TAG, "Ignoring duplicate WCS cmd=%s task=%d state=%s",
+                 protocol_command_name(cmd->type), task, state_name(current));
+        return;
+    }
+    if (decision == TRANSITION_REJECT) {
+        ESP_LOGW(TAG, "Blocked invalid WCS transition cmd=%s task=%d state=%s ref=%lu",
+                 protocol_command_name(cmd->type), task, state_name(current),
+                 (unsigned long)cmd->ref_seq);
+        return;
+    }
     if (cmd->type == PROTOCOL_CMD_ACCEPTED) {
-        if (!status.Call[task - 1].pending) return;
         status_clear_call(task);
         status_clear_task_error(task);
         status_clear_tower_warning_for_task(task);
@@ -318,7 +371,7 @@ static void tick_transactions(void)
         if (time_reached(now_ms, call->deadline_ms)) {
             ESP_LOGW(TAG, "CALL task %d timed out seq=%lu after %u retries",
                      task, (unsigned long)call->seq, call->retry_count);
-            status_clear_call(task);
+            mission_set_state(task, TASK_IDLE, 0);
             status_set_task_error(task, now_ms + 2000U);
             status_request_feedback(OUTPUT_FEEDBACK_TRANSACTION_FAILED);
         } else if (call->retry_count < MISSION_MAX_RETRIES &&

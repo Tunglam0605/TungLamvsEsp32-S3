@@ -19,14 +19,8 @@ void state_machine_task(void *pvParameters);
  * hủy. Việc tiếp nhận (admission) và thử lại do manager sở hữu. */
 void handle_button_press(int button_id, uint32_t timestamp);
 
-/* Bộ điều hợp cũ (legacy) giữ lại vì tương thích nguồn. Nó cố tình bỏ qua
- * dữ liệu lệnh không có ref_seq; app_event_queue là điểm vào được hỗ trợ. */
-void handle_mqtt_command(const char *cmd_type, int task_id,
-                         const char *agv_id, uint32_t timestamp);
-
 TaskState_t get_task_state(int task_id);
 const char *get_task_state_str(int task_id);
 const char *get_comm_state_str(void);
-void reset_task(int task_id);
 
 #endif /* CALLBOX_STATE_MACHINE_H */

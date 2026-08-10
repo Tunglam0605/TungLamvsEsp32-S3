@@ -20,14 +20,13 @@
  *          │ init        │   │ init         │   │ netprt auto-save   │
  *          └─────────────┘   └──────────────┘   └────────────────────┘
  *          ┌─────────────┐   ┌─────────────┐   ┌────────────────────┐
- *          │ MQTT init   │ → │ 4 task      │ → │ vòng nền auto-save │
- *          │ + 5s đợi    │   │ (io/state/  │   │ seq_num mỗi 6 s    │
- *          └─────────────┘   │ mqtt×2)     │   └────────────────────┘
+ *          │ MQTT init   │ → │ 3 task      │ → │ vòng nền nhàn rỗi  │
+ *          │ + 5s đợi    │   │ (io/state/  │   │                    │
+ *          └─────────────┘   │ mqtt)       │   └────────────────────┘
  *                            └─────────────┘
  *
- *          Vòng lặp chính (while(1)) không làm gì khác ngoài việc mỗi 6 s
- *          lưu seq_num hiện tại xuống NVS — các task khác đã được tạo và
- *          chạy độc lập.
+ *          Sequence service persist số thứ tự ngay khi cấp phát. Vòng lặp
+ *          chính chỉ giữ composition root sống; các task chạy độc lập.
  *
  * @note    Các giá trị factory default (AGV1 và Robotics AUBOT 1 / 123456789 / broker …)
  *          chỉ được dùng khi NVS trống; người dùng có thể thay đổi qua
@@ -94,14 +93,27 @@ static Config_t g_config = {
     .mqtt_port = 1884,
     .mqtt_transport = MQTT_TRANSPORT_TCP,
     .mqtt_user = "callbox",
-    /* Broker test/LAN mode does not require MQTT authentication. */
     .mqtt_pass = "",
     .callbox_id = "001",
-    .web_password = "aubot",
+    .web_password = "",
 };
 
+static esp_err_t build_default_portal_password(char *password, size_t password_size)
+{
+    if (!password || password_size == 0) return ESP_ERR_INVALID_ARG;
+
+    uint8_t mac[6] = {0};
+    esp_err_t err = esp_efuse_mac_get_default(mac);
+    if (err != ESP_OK) return err;
+
+    const int written = snprintf(password, password_size, "Aubot-%02X%02X%02X-9",
+                                 mac[3], mac[4], mac[5]);
+    return written > 0 && (size_t)written < password_size
+               ? ESP_OK : ESP_ERR_INVALID_SIZE;
+}
+
 /* Nạp cấu hình đã lưu từ NVS; chấp nhận hồi phục factory khi thiếu */
-static void load_config_from_nvs(void)
+static bool load_config_from_nvs(void)
 {
     esp_err_t err = callbox_config_store_load(&g_config);
     if (err != ESP_OK) {
@@ -124,10 +136,29 @@ static void load_config_from_nvs(void)
     if (g_config.sntp_fallback[0] == '\0') {
         strncpy(g_config.sntp_fallback, "time.google.com", sizeof(g_config.sntp_fallback) - 1);
     }
-    /* Mật khẩu portal STA được cố định cho firmware đang triển khai. Không
-     * kế thừa giá trị cũ do firmware trước để lại trong NVS. */
-    strncpy(g_config.web_password, "aubot", sizeof(g_config.web_password) - 1);
-    g_config.web_password[sizeof(g_config.web_password) - 1] = '\0';
+    /* Bản cũ dùng một credential chung cho mọi thiết bị. Migrate cả giá trị
+     * thiếu và giá trị legacy sang mật khẩu ổn định, riêng theo factory MAC. */
+    if (g_config.web_password[0] == '\0' || strcmp(g_config.web_password, "aubot") == 0) {
+        char generated_password[sizeof(g_config.web_password)] = {0};
+        err = build_default_portal_password(generated_password,
+                                            sizeof(generated_password));
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Cannot derive a secure portal password: %s",
+                     esp_err_to_name(err));
+            return false;
+        }
+        strncpy(g_config.web_password, generated_password,
+                sizeof(g_config.web_password) - 1);
+        g_config.web_password[sizeof(g_config.web_password) - 1] = '\0';
+        memset(generated_password, 0, sizeof(generated_password));
+        err = callbox_config_store_save(&g_config);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Could not persist migrated portal credential: %s",
+                     esp_err_to_name(err));
+            return false;
+        }
+        ESP_LOGW(TAG, "Migrated legacy portal credential to the per-device default");
+    }
     if (g_config.mqtt_port == 0) g_config.mqtt_port = 1884;
     /* Các bản cũ dùng ID như cb01. Chỉ giữ phần số để mọi thiết bị dùng
      * quy ước dễ thay thế AUBOT-Callbox-<số>. */
@@ -141,6 +172,7 @@ static void load_config_from_nvs(void)
     if (numeric_len == 0) strncpy(numeric_id, "001", sizeof(numeric_id) - 1);
     strncpy(g_config.callbox_id, numeric_id, sizeof(g_config.callbox_id) - 1);
     g_config.callbox_id[sizeof(g_config.callbox_id) - 1] = '\0';
+    return true;
 }
 
 /* Build the commissioning identity in the application layer.  The base name
@@ -206,7 +238,10 @@ void callbox_app_run(void)
     }
 
     /* Bước 2: nạp cấu hình đã lưu (hoặc factory default) vào g_config */
-    load_config_from_nvs();
+    if (!load_config_from_nvs()) {
+        ESP_LOGE(TAG, "Configuration credential migration failed; startup stopped");
+        return;
+    }
 
     /* Việc cấp phát số thứ tự độc lập với Config_t. NVS chỉ là phương tiện
      * lưu trữ do sequence_service sở hữu. */
@@ -278,19 +313,19 @@ void callbox_app_run(void)
     /* Bước 7: khởi tạo MQTT (handshake CONTONT/SUBSCRIBE khi có mạng) */
     mqtt_client_init(&g_config);
 
-    /* Bước 8: tạo 4 task chính chạy song song:
+    /* Bước 8: tạo 3 task chính chạy song song:
      *   - io_handler: đọc nút (debounding) → publish vào queue
      *   - state_machine: chuyển trạng thái, stall LED/buzzer/tower
      *   - mqtt_comm: gửi HEARTBEAT + reconnect
-     *   - mqtt_event: nhận lệnh/status từ WCS
-     * Độ ưu tiên: state(10) > mqtt_event(9) > mqtt_comm(8) > io(5). */
+     * MQTT event callback do ESP-MQTT sở hữu và chỉ đẩy app_event vào queue.
+     * Độ ưu tiên: state(10) > mqtt_comm(8) > io(5). */
     xTaskCreate(io_handler_task, "io_handler", 2048, NULL, 5, NULL);
     xTaskCreate(state_machine_task, "state_machine", 3072, NULL, 10, NULL);
     xTaskCreate(mqtt_communication_task, "mqtt_comm", 4096, NULL, 8, NULL);
 
     ESP_LOGI(TAG, "All tasks created and running");
 
-    /* Vòng lặp chính: mỗi 6 s lưu seq_num xuống NVS (phòng reset đột ngột) */
+    /* Sequence được persist khi cấp phát; vòng lặp chỉ giữ app sống. */
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(60000));
     }

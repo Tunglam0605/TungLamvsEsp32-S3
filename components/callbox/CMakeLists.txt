@@ -1,3 +1,17 @@
+if(CONFIG_CALLBOX_PRODUCTION_BUILD)
+    if(NOT CONFIG_SECURE_BOOT OR NOT CONFIG_SECURE_BOOT_V2_ENABLED)
+        message(FATAL_ERROR "Production Callbox build requires Secure Boot V2")
+    endif()
+    if(NOT CONFIG_SECURE_FLASH_ENC_ENABLED OR
+       NOT CONFIG_SECURE_FLASH_ENCRYPTION_MODE_RELEASE)
+        message(FATAL_ERROR "Production Callbox build requires flash encryption in release mode")
+    endif()
+    if(NOT CONFIG_NVS_ENCRYPTION OR
+       NOT CONFIG_NVS_SEC_KEY_PROTECT_USING_HMAC)
+        message(FATAL_ERROR "Production Callbox build requires NVS encryption with HMAC key protection")
+    endif()
+endif()
+
 idf_component_register(SRCS "src/protocol_types.c"
                              "src/app_event_queue.c"
                              "src/status.c"
@@ -24,4 +38,5 @@ idf_component_register(SRCS "src/protocol_types.c"
                     EMBED_FILES "company-logo-transparent.png"
                     REQUIRES freertos platform_nvs bsp esp_timer platform_wifi
                              mqtt mbedtls platform_time esp_http_server
-                             esp_netif lwip esp_system esp_common esp_hw_support)
+                             esp_netif lwip esp_system esp_common esp_hw_support
+                             bootloader_support)

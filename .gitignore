@@ -1,6 +1,8 @@
 # ESP-IDF build outputs
 /build/
 /build-win/
+/build-production/
+/build-security-check/
 /managed_components/
 
 # Local ESP-IDF installer state and diagnostic logs
@@ -16,3 +18,11 @@
 /tools/__pycache__/
 /tools/*.py[cod]
 /tools/mqtt_background*.log
+
+# Production signing keys are provisioned outside Git.
+/keys/
+/secure_boot_signing_key.pem
+/sdkconfig.production
+/sdkconfig.production.old
+/sdkconfig.security-check
+/sdkconfig.security-check.old

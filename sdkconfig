@@ -1048,27 +1048,13 @@ CONFIG_PARTITION_TABLE_MD5=y
 # end of Partition Table
 
 #
-# Callbox SEWS Configuration
+# Callbox Security
 #
 # default:
-CONFIG_CALLBOX_ID="cb01"
+# CONFIG_CALLBOX_PRODUCTION_BUILD is not set
 # default:
-CONFIG_WIFI_SSID="SHWS-CU200"
-# default:
-CONFIG_WIFI_PASSWORD="1234567890"
-# default:
-CONFIG_MQTT_BROKER="mqtt://10.1.200.1:1883"
-# default:
-CONFIG_MQTT_PORT=1883
-# default:
-CONFIG_MQTT_USERNAME="callbox"
-# default:
-CONFIG_MQTT_PASSWORD="password123"
-# default:
-CONFIG_HEARTBEAT_INTERVAL=20
-# default:
-CONFIG_TASK_TIMEOUT=5
-# end of Callbox SEWS Configuration
+# CONFIG_CALLBOX_ALLOW_ANONYMOUS_MQTT is not set
+# end of Callbox Security
 
 #
 # Compiler options

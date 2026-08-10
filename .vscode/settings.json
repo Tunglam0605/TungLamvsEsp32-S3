@@ -13,8 +13,14 @@
     "IDF_TOOLS_PATH": "C:\\Espressif\\tools",
     "IDF_PYTHON_ENV_PATH": "C:\\Espressif\\tools\\python\\v6.1-dev\\venv",
     "PYTHON": "C:\\Espressif\\tools\\python\\v6.1-dev\\venv\\Scripts\\python.exe",
-    "PYTHONPATH": "C:\\Users\\Admin\\Documents\\ESP32\\callbox_sews\\.vscode\\python",
+    "PYTHONPATH": "${workspaceFolder}\\.vscode\\python",
     "ESP_IDF_VERSION": "6.1",
     "PROCESSOR_ARCHITECTURE": "AMD64"
-  }
+  },
+  "clangd.path": "C:\\Espressif\\tools\\esp-clang\\esp-20.1.1_20250829\\esp-clang\\bin\\clangd.exe",
+  "clangd.arguments": [
+    "--background-index",
+    "--query-driver=**",
+    "--compile-commands-dir=c:\\Users\\Admin\\Documents\\ESP32\\TungLamvsEsp32-S3\\build-win"
+  ]
 }

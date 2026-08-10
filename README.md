@@ -50,7 +50,7 @@ Bootstrap khởi tạo NVS/config/sequence/queues/BSP/I-O/Mission, sau đó Wi-F
 
 ## Mission và MQTT/WCS
 
-CALL chỉ tạo transaction pending và LED nháy chậm. matching accepted mới chuyển Mission queued; assigned/locked/completed do WCS quyết định. Retry giữ nguyên seq, vì vậy WCS phải deduplicate.
+CALL chỉ tạo transaction pending và LED nháy chậm. Matching `accepted` mới chuyển Mission sang queued; `assigned` chỉ được nhận từ queued, `locked` từ queued/assigned và `completed` từ mission active. Lệnh lặp cùng trạng thái là no-op; chuyển lùi hoặc lệnh đến muộn bị bỏ qua. Retry giữ nguyên seq, vì vậy WCS phải deduplicate.
 
 Topics QoS 1:
 
@@ -67,9 +67,10 @@ Client ID là AUBOT-Callbox-{id}; heartbeat 15 giây, keepalive 30 giây, LWT re
 - AP: CALLBOX-{id}-{MAC6}; password CALLBOX-{id}; IP 192.168.65.204/24.
 - Giữ Cancel tối thiểu 5 giây để bật/tắt Rescue AP.
 - AP tự tắt khi STA ổn định ít nhất 30 giây, rescue tắt, không có AP client và portal inactive.
-- Portal qua STA hoặc AP: username admin, mật khẩu aubot. Firmware hiện ép mật khẩu này ở mỗi lần boot, nên chưa hỗ trợ mật khẩu portal tùy chỉnh bền vững.
+- Portal qua STA hoặc AP đều cần đăng nhập. Username là `admin`; mặc định riêng từng thiết bị là `Aubot-<MAC6>-9`, trong đó `MAC6` là sáu ký tự cuối của MAC/SSID AP. Giá trị legacy `aubot` được migrate và có thể đổi bền vững trong portal.
+- MQTT mặc định bắt buộc cả username và password. Anonymous chỉ dành cho broker development cô lập khi build với `CONFIG_CALLBOX_ALLOW_ANONYMOUS_MQTT=y`.
 
-Đổi credential factory trước production.
+Quy trình key, build production, eFuse và migration NVS: [Security](docs/SECURITY.md).
 
 ## Build và flash
 
@@ -89,9 +90,11 @@ Lệnh chính, không phụ thuộc máy cụ thể:
 
 COM18 chỉ là ví dụ, thay bằng cổng thiết bị thực tế. Nếu parallel build gặp GCC ICE bên trong ESP-IDF, chạy ninja -C build-win -j1.
 
+Không dùng build development để phát hành. Production dùng profile riêng trong `sdkconfig.production.defaults`; xem [Security](docs/SECURITY.md) trước khi tạo key hoặc flash vì lần boot đầu có thể ghi eFuse không đảo ngược.
+
 ## Validation state
 
-Firmware functional baseline: H.2.1 là 88669b8a35de7968d55a215d3102af5b049cdf0a; portal authentication hiện tại là 77fb093e03ed891eff27083affe2f5d6d9eb71c1. Commit tài liệu không làm thay đổi binary.
+Firmware functional baseline: H.2.1 là 88669b8a35de7968d55a215d3102af5b049cdf0a. Portal hiện yêu cầu xác thực trên cả AP/STA, giới hạn thử đăng nhập và hỗ trợ đổi mật khẩu bền vững.
 
 - H.2 provider DHCP: 6493d671 — provider khởi động lại DHCP khi runtime static → DHCP.
 - H.2.1 CallBox mapping: 88669b8 — portal save → wifi_apply_config → configure_sta_ip → platform_wifi_apply_sta_network_config cho cả DHCP và static.
@@ -106,12 +109,12 @@ Runtime static → DHCP phần cứng vẫn **NOT RUN**; không được coi là
 - [components](components/README.md) — dependency layers.
 - [CallBox](components/callbox/README.md) — engineering/runtime guide.
 - [BSP](components/bsp/README.md), [drivers](components/drivers/README.md), [platform](components/platform/README.md).
-- [docs](docs/README.md) — tài liệu handoff; [WCS MQTT interface](docs/WCS_MQTT_INTERFACE.md).
+- [docs](docs/README.md) — tài liệu handoff; [WCS MQTT interface](docs/WCS_MQTT_INTERFACE.md); [Security](docs/SECURITY.md).
 - [tools](tools/README.md) — broker test cục bộ.
 
 ## Known nonblocking debt
 
-P0 = 0, P1 = 0. P2/P3 còn: sequence init mutex cleanup, AP-start lifecycle/hardware validation, MQTT runtime config snapshot concurrency, multi-field status snapshot consistency, rescue notification mailbox đơn slot, legacy/dead comments/APIs.
+P0 = 0, P1 = 0. P2/P3 còn: sequence init mutex cleanup, AP-start lifecycle/hardware validation, MQTT runtime config snapshot concurrency, multi-field status snapshot consistency và rescue notification mailbox đơn slot.
 
 ## Hardware acceptance outstanding
 

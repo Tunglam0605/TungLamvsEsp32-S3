@@ -102,25 +102,25 @@ Các số JSON phải là number, không phải string. Command không phải sy
 
     {"type":"accepted","task":1,"ref_seq":1042,"ts":1751791865}
 
-ref_seq phải khớp CALL seq đang pending. Call pending được xóa và Mission thành queued.
+ref_seq phải khớp CALL seq đang pending và task phải idle. Call pending được xóa và Mission thành queued. `accepted` lặp lại khi task đã queued là no-op.
 
 ### assigned
 
     {"type":"assigned","task":1,"ref_seq":1042,"agv_id":"AGV03","ts":1751791870}
 
-ref_seq vẫn là CALL seq gốc; Mission thành assigned. agv_id là tùy chọn, tối đa 31 ký tự. WCS nên gửi khi có identity assignment để CallBox giữ trong local mission context và khôi phục qua sync snapshot. agv_id không được publish trong heartbeat/status hiện tại.
+ref_seq vẫn là CALL seq gốc; Mission chỉ chuyển từ queued sang assigned. Lệnh lặp khi đã assigned là no-op; lệnh đến khi idle/locked bị bỏ qua. agv_id là tùy chọn, tối đa 31 ký tự. WCS nên gửi khi có identity assignment để CallBox giữ trong local mission context và khôi phục qua sync snapshot. agv_id không được publish trong heartbeat/status hiện tại.
 
 ### locked
 
     {"type":"locked","task":1,"ref_seq":1042,"ts":1751791880}
 
-Mission thành locked. Locked không thể bị hủy từ CallBox.
+Mission chỉ chuyển từ queued/assigned sang locked. Lệnh lặp khi đã locked là no-op; chuyển lùi bị bỏ qua. Locked không thể bị hủy từ CallBox.
 
 ### completed
 
     {"type":"completed","task":1,"ref_seq":1042,"ts":1751791950}
 
-Mission trở về idle và cảnh báo overdue của task được xóa.
+Lệnh chỉ hợp lệ khi mission đang queued/assigned/locked. Mission trở về idle, xóa pending/CallSequence/agv_id và cảnh báo overdue; lệnh cũ cùng ref_seq sau đó không còn tương quan được.
 
 ### cancel_ack
 
@@ -146,7 +146,7 @@ CallBox xác định rejected thuộc CALL hay CANCEL bằng transaction pending
 
     {"type":"overdue","task":1,"ref_seq":1042,"ts":1751791960}
 
-ref_seq phải tương quan CALL seq. Lệnh chỉ bật warning; không tự completed mission.
+ref_seq phải tương quan CALL seq và mission phải đang queued/assigned/locked. Lệnh chỉ bật warning; không tự completed mission.
 
 ### sync
 
@@ -162,7 +162,7 @@ ref_seq phải tương quan CALL seq. Lệnh chỉ bật warning; không tự co
       "task2_agv_id":""
     }
 
-sync.ref_seq phải bằng sync_request seq đang pending. task1_state và task2_state bắt buộc, hợp lệ: idle, queued, assigned, locked, completed. task1_seq/task2_seq và agv_id được parser đọc nếu có; WCS nên luôn gửi để snapshot đầy đủ.
+sync.ref_seq phải bằng sync_request seq đang pending. task1_state và task2_state bắt buộc, hợp lệ: idle, queued, assigned, locked, completed. Snapshot queued/assigned/locked bắt buộc có taskN_seq khác 0; nếu thiếu, toàn bộ sync bị bỏ qua. completed được chuẩn hóa thành terminal idle. task1_seq/task2_seq và agv_id được parser đọc nếu có; WCS nên luôn gửi để snapshot đầy đủ.
 
 Matching sync overwrite/reconcile cả hai task, xóa local CALL/CANCEL stale và chuyển Comm sang ready. Sync không khớp bị bỏ qua.
 
@@ -259,7 +259,7 @@ Khuyến nghị ACL cho CallBox 001:
 
 Đây là khuyến nghị deployment; firmware không tự enforce broker ACL.
 
-Portal qua STA hoặc AP đều yêu cầu admin / aubot. Firmware hiện ép web_password thành aubot sau mỗi boot, vì vậy không được hứa hẹn custom password lưu bền qua reboot. Đây không phải WCS credential/API.
+Portal qua STA hoặc AP đều yêu cầu username `admin`. Mật khẩu mặc định riêng thiết bị là `Aubot-<MAC6>-9`; firmware migrate giá trị legacy `aubot`, giới hạn thử đăng nhập và lưu bền vững mật khẩu mới. MQTT mặc định bắt buộc username/password; anonymous chỉ có trong build development được bật rõ ràng. Đây không phải WCS credential/API.
 
 ## 10.1 Giới hạn MQTT command inbound
 

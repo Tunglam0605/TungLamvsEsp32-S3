@@ -24,7 +24,7 @@ callbox_app_run khởi tạo NVS/config → sequence service → queues → BSP 
 
 ## Mission Manager
 
-Mission Manager là single writer của mission, pending transaction và Comm. State là idle, queued, assigned, locked, completed. WCS authoritative: local CALL không tự queued; matching accepted mới queued.
+Mission Manager là single writer của mission, pending transaction và Comm. State là idle, queued, assigned, locked, completed. WCS authoritative: local CALL không tự queued; matching accepted mới queued. Policy chặn chuyển lùi: assigned chỉ từ queued, locked chỉ từ queued/assigned, completed/overdue chỉ áp dụng cho mission active. Context sequence/AGV được xóa khi task kết thúc nên lệnh cũ không thể kích hoạt lại mission.
 
 Task1/Task2 độc lập. Admission CALL/CANCEL yêu cầu Comm READY, network link, MQTT và không có pending conflict. Retry transaction dùng cùng seq mỗi 5 giây, tối đa hai retry, deadline 15 giây. Sequence được persist trước khi expose nên reboot có thể skip số nhưng không reuse.
 
@@ -42,7 +42,7 @@ DO1 là business buzzer: call 100 ms, assigned 100 ms, config saved 120 ms, canc
 
 MQTT adapter dùng ESP-MQTT TCP/TLS, QoS 1, LWT/status retained. Callback MQTT chỉ biến payload thành app event, không mutate Mission. agv_id tối đa 31 ký tự được giữ trong context Mission để reconcile qua sync; nó không xuất hiện trong heartbeat/status hiện tại. Network link là Wi-Fi STA OR W5500 Ethernet; topic không đổi.
 
-Wi-Fi policy giữ tối đa năm profile, chọn SSID nhìn thấy mạnh nhất, quản lý AP/Rescue AP và runtime DHCP/static mapping. Portal flow là parse → validate → persist NVS → update Config_t → selective Wi-Fi/MQTT/SNTP apply.
+Wi-Fi policy giữ tối đa năm profile, chọn SSID nhìn thấy mạnh nhất, quản lý AP/Rescue AP và runtime DHCP/static mapping. Portal trên AP/STA đều cần login, giới hạn năm lần sai trong một phút theo IP và cho đổi mật khẩu theo policy tối thiểu 12 ký tự. Portal flow là parse → validate → persist NVS → update Config_t → selective Wi-Fi/MQTT/SNTP apply. MQTT fail closed nếu thiếu username/password, trừ build development bật anonymous rõ ràng.
 
 Runtime network path sau H.2.1:
 
@@ -70,4 +70,4 @@ Queue app event=24, button=16, I/O state=1, renderer snapshot=1, business buzzer
 
 Lỗi transaction tạo feedback; retry timeout không tự giả định WCS state. MQTT reconnect đưa Comm về syncing cho tới sync hợp lệ. TLS chờ SNTP time valid.
 
-P2/P3 còn: sequence init mutex cleanup, AP-start lifecycle HW validation, MQTT config snapshot concurrency, multi-field status snapshot consistency, rescue feedback mailbox đơn slot, legacy/dead comments/APIs.
+P2/P3 còn: sequence init mutex cleanup, AP-start lifecycle HW validation, MQTT config snapshot concurrency, multi-field status snapshot consistency và rescue feedback mailbox đơn slot.

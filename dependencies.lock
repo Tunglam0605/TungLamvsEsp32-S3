@@ -30,6 +30,6 @@ dependencies:
 direct_dependencies:
 - espressif/w5500
 - idf
-manifest_hash: c5956b039e050514dd0d42cdaf1510d022acb2f22ed5b6b2a43dfce6907b7ba8
+manifest_hash: 0b06e624413d69d7c8ef297a5ad4b70a7ada98845c3f4c5e9abf0e7bcb4c63ae
 target: esp32s3
 version: 3.0.0
