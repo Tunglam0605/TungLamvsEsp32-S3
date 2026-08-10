@@ -94,7 +94,8 @@ static Config_t g_config = {
     .mqtt_port = 1884,
     .mqtt_transport = MQTT_TRANSPORT_TCP,
     .mqtt_user = "callbox",
-    .mqtt_pass = "password123",
+    /* Broker test/LAN mode does not require MQTT authentication. */
+    .mqtt_pass = "",
     .callbox_id = "001",
     .web_password = "aubot",
 };

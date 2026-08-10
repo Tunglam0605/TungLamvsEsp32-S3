@@ -80,6 +80,7 @@ static httpd_handle_t s_server = NULL;
 
 #define PORTAL_SCAN_MAX_RESULTS 32
 #define PORTAL_HTTP_BODY_TIMEOUTS_MAX 1
+#define PORTAL_MQTT_PASS_RETAIN_MARKER "__CB_KEEP__"
 /* Giữ các mảng lớn (kết quả quét/JSON/HTML) ở tầng tĩnh, KHÔNG nằm trong
  * stack của task HTTP server (ngăn stack overflow). */
 static platform_wifi_scan_record_t s_portal_scan_records[PORTAL_SCAN_MAX_RESULTS];
@@ -88,6 +89,12 @@ static char s_io_status_json[768];
 /* Trang cấu hình 1 tệp duy nhất nhúng CSS + markup monitor; bộ đệm đủ lớn
  * để stylesheet hoạt động không bao giờ bị cắt cụt. */
 static char s_page_html[40960];
+/* httpd has one request worker. Keep page-rendering work buffers out of its
+ * task stack; a modern portal render otherwise needs several KiB of stack. */
+static char s_mqtt_security_script[2000];
+static char s_sntp_primary_json[128];
+static char s_sntp_fallback_json[128];
+static char s_sntp_script[1800];
 
 /* HTTP server has one request worker.  A half-sent POST must not wait
  * forever, otherwise it delays every login and portal API request behind it. */
@@ -1122,22 +1129,21 @@ static esp_err_t portal_page_handler_modern(httpd_req_t *req)
     /* Add the transport choice without disturbing the stable, compact MQTT
      * field grid. The select remains a normal form element and is saved by
      * the existing FormData code. */
-    char mqtt_security_script[1400];
-    snprintf(mqtt_security_script, sizeof(mqtt_security_script),
-             "<script>(function(){const grid=document.querySelector('.mqtt .topic-grid');if(!grid)return;const row=document.createElement('div');row.className='mqtt-security';row.innerHTML=\"<div class='field'><label for='mqtt_transport'>B&#x1EA3;o m&#x1EAD;t k&#x1EBF;t n&#x1ED1;i</label><select id='mqtt_transport' name='mqtt_transport'><option value='tcp' %s>TCP - broker n&#x1ED9;i b&#x1ED9;</option><option value='tls' %s>TLS - Cloud / Internet</option></select></div><span>TLS d&#xF9;ng CA c&#xF4;ng khai v&#xE0; ki&#x1EC3;m tra t&#xEA;n mi&#x1EC1;n broker.</span>\";grid.parentNode.insertBefore(row,grid)})();</script>",
+    snprintf(s_mqtt_security_script, sizeof(s_mqtt_security_script),
+             "<script>(function(){const grid=document.querySelector('.mqtt .topic-grid');if(!grid)return;const userLabel=document.querySelector('label[for=mqtt_user]'),passLabel=document.querySelector('label[for=mqtt_pass]'),pass=document.getElementById('mqtt_pass'),saved=%s;if(userLabel)userLabel.innerHTML='T&#xE0;i kho&#x1EA3;n MQTT (broker)';if(passLabel)passLabel.innerHTML='M&#x1EAD;t kh&#x1EA9;u MQTT (broker)';if(pass){pass.placeholder='\\u0110\\u1ec3 tr\\u1ed1ng \\u0111\\u1ec3 kh\\u00f4ng d\\u00f9ng m\\u1eadt kh\\u1ea9u';if(saved){pass.value='__CB_KEEP__';pass.addEventListener('focus',()=>{if(pass.value==='__CB_KEEP__')pass.value=''},{once:true})}}const row=document.createElement('div');row.className='mqtt-security';row.innerHTML=\"<div class='field'><label for='mqtt_transport'>B&#x1EA3;o m&#x1EAD;t k&#x1EBF;t n&#x1ED1;i</label><select id='mqtt_transport' name='mqtt_transport'><option value='tcp' %s>TCP - broker n&#x1ED9;i b&#x1ED9;</option><option value='tls' %s>TLS - Cloud / Internet</option></select></div>\";grid.parentNode.insertBefore(row,grid)})();</script>",
+             s_config->mqtt_pass[0] ? "true" : "false",
              s_config->mqtt_transport == MQTT_TRANSPORT_TCP ? "selected" : "",
              s_config->mqtt_transport == MQTT_TRANSPORT_TLS ? "selected" : "");
-    (void)page_insert_before("</body>", mqtt_security_script);
+    (void)page_insert_before("</body>", s_mqtt_security_script);
 
     /* IT can supply an internal NTP IP here; public servers remain the
      * factory fallback. Inputs are normal form fields, persisted in NVS. */
-    char sntp_primary_json[128], sntp_fallback_json[128], sntp_script[1800];
-    json_escape(s_config->sntp_primary, sntp_primary_json, sizeof(sntp_primary_json));
-    json_escape(s_config->sntp_fallback, sntp_fallback_json, sizeof(sntp_fallback_json));
-    snprintf(sntp_script, sizeof(sntp_script),
+    json_escape(s_config->sntp_primary, s_sntp_primary_json, sizeof(s_sntp_primary_json));
+    json_escape(s_config->sntp_fallback, s_sntp_fallback_json, sizeof(s_sntp_fallback_json));
+    snprintf(s_sntp_script, sizeof(s_sntp_script),
              "<script>(function(){const card=document.querySelector('.mqtt');if(!card)return;const p=\"%s\",b=\"%s\";const row=document.createElement('div');row.className='sntp-row';row.innerHTML=\"<div class='field'><label for='sntp_primary'>SNTP ch&#x00ED;nh (NTP n&#x1ED9;i b&#x1ED9;)</label><input id='sntp_primary' name='sntp_primary' maxlength='63' required></div><div class='field'><label for='sntp_fallback'>SNTP d&#x1EF1; ph&#x00F2;ng</label><input id='sntp_fallback' name='sntp_fallback' maxlength='63' required></div>\";row.querySelector('#sntp_primary').value=p;row.querySelector('#sntp_fallback').value=b;const anchor=card.querySelector('.mqtt-security')||card.querySelector('.topic-grid');card.insertBefore(row,anchor)})();</script>",
-             sntp_primary_json, sntp_fallback_json);
-    (void)page_insert_before("</body>", sntp_script);
+             s_sntp_primary_json, s_sntp_fallback_json);
+    (void)page_insert_before("</body>", s_sntp_script);
 
     /* Status text is filled with textContent at runtime. Decode our compact
      * numeric HTML entities there as well, while keeping SSID values as text
@@ -1346,7 +1352,8 @@ static esp_err_t save_handler(httpd_req_t *req)
         strncpy(updated.mqtt_user, value, sizeof(updated.mqtt_user) - 1);
         updated.mqtt_user[sizeof(updated.mqtt_user) - 1] = '\0';
     }
-    if (form_value(body, "mqtt_pass", value, sizeof(value)) && value[0]) {
+    if (form_value(body, "mqtt_pass", value, sizeof(value)) &&
+        strcmp(value, PORTAL_MQTT_PASS_RETAIN_MARKER) != 0) {
         strncpy(updated.mqtt_pass, value, sizeof(updated.mqtt_pass) - 1);
         updated.mqtt_pass[sizeof(updated.mqtt_pass) - 1] = '\0';
     }
@@ -1408,7 +1415,7 @@ esp_err_t config_portal_start(Config_t *config)
     /* Cấu hình server: tăng max_uri_handlers cho đủ 13 route + stack an toàn */
     httpd_config_t server_config = HTTPD_DEFAULT_CONFIG();
     server_config.max_uri_handlers = 15;
-    server_config.stack_size = 6144;
+    server_config.stack_size = 8192;
     server_config.recv_wait_timeout = 2;
     server_config.send_wait_timeout = 2;
 
