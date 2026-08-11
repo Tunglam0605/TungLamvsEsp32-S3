@@ -1,3 +1,3 @@
-idf_component_register(SRCS "esp32_s3_base.c"
+idf_component_register(SRCS "gateway_main.c"
                     INCLUDE_DIRS "."
-                    REQUIRES bsp nvs_flash esp_event esp_netif)
+                    REQUIRES gateway nvs_flash esp_event esp_netif)
