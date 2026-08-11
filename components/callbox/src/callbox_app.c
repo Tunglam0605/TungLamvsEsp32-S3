@@ -95,21 +95,28 @@ static Config_t g_config = {
     .mqtt_user = "callbox",
     .mqtt_pass = "",
     .callbox_id = "001",
-    .web_password = "",
+    /* Mật khẩu WebUI demo dùng chung theo yêu cầu vận hành hiện tại. */
+    .web_password = "aubot",
 };
 
-static esp_err_t build_default_portal_password(char *password, size_t password_size)
+/* Nhận diện định dạng mật khẩu tự sinh của các bản firmware trước.
+ * Chỉ dùng để migrate về mật khẩu demo mới, không đụng đến mật khẩu tùy chỉnh. */
+static bool is_legacy_generated_portal_password(const char *password)
 {
-    if (!password || password_size == 0) return ESP_ERR_INVALID_ARG;
+    if (!password || strlen(password) != 14U ||
+        strncmp(password, "Aubot-", 6U) != 0 ||
+        password[12] != '-' || password[13] != '9') {
+        return false;
+    }
 
-    uint8_t mac[6] = {0};
-    esp_err_t err = esp_efuse_mac_get_default(mac);
-    if (err != ESP_OK) return err;
-
-    const int written = snprintf(password, password_size, "Aubot-%02X%02X%02X-9",
-                                 mac[3], mac[4], mac[5]);
-    return written > 0 && (size_t)written < password_size
-               ? ESP_OK : ESP_ERR_INVALID_SIZE;
+    for (size_t i = 6U; i < 12U; ++i) {
+        const char c = password[i];
+        if (!((c >= '0' && c <= '9') ||
+              (c >= 'A' && c <= 'F'))) {
+            return false;
+        }
+    }
+    return true;
 }
 
 /* Nạp cấu hình đã lưu từ NVS; chấp nhận hồi phục factory khi thiếu */
@@ -136,28 +143,19 @@ static bool load_config_from_nvs(void)
     if (g_config.sntp_fallback[0] == '\0') {
         strncpy(g_config.sntp_fallback, "time.google.com", sizeof(g_config.sntp_fallback) - 1);
     }
-    /* Bản cũ dùng một credential chung cho mọi thiết bị. Migrate cả giá trị
-     * thiếu và giá trị legacy sang mật khẩu ổn định, riêng theo factory MAC. */
-    if (g_config.web_password[0] == '\0' || strcmp(g_config.web_password, "aubot") == 0) {
-        char generated_password[sizeof(g_config.web_password)] = {0};
-        err = build_default_portal_password(generated_password,
-                                            sizeof(generated_password));
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "Cannot derive a secure portal password: %s",
-                     esp_err_to_name(err));
-            return false;
-        }
-        strncpy(g_config.web_password, generated_password,
-                sizeof(g_config.web_password) - 1);
+    /* Chuẩn hóa cấu hình trống và mật khẩu tự sinh cũ về mật khẩu demo aubot.
+     * Mật khẩu do người dùng tự đặt theo định dạng khác vẫn được giữ nguyên. */
+    if (g_config.web_password[0] == '\0' ||
+        is_legacy_generated_portal_password(g_config.web_password)) {
+        strncpy(g_config.web_password, "aubot", sizeof(g_config.web_password) - 1);
         g_config.web_password[sizeof(g_config.web_password) - 1] = '\0';
-        memset(generated_password, 0, sizeof(generated_password));
         err = callbox_config_store_save(&g_config);
         if (err != ESP_OK) {
-            ESP_LOGE(TAG, "Could not persist migrated portal credential: %s",
+            ESP_LOGE(TAG, "Could not persist default portal credential: %s",
                      esp_err_to_name(err));
             return false;
         }
-        ESP_LOGW(TAG, "Migrated legacy portal credential to the per-device default");
+        ESP_LOGW(TAG, "Portal credential migrated to demo default");
     }
     if (g_config.mqtt_port == 0) g_config.mqtt_port = 1884;
     /* Các bản cũ dùng ID như cb01. Chỉ giữ phần số để mọi thiết bị dùng
