@@ -1,4 +1,4 @@
 version: "1.0.0"
-description: AGV Callbox SEWS - MQTT-based Control System
+description: AUBOT ESP32-S3 CAN-enabled industrial Gateway
 
 dependencies: {}

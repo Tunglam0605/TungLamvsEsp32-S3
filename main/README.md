@@ -1,5 +1,4 @@
 # main
 
-Entrypoint toi thieu cua firmware nen. No khoi tao NVS, ESP-NETIF, event loop
-va BSP; khong chua logic san pham. Nhanh Callbox/Gateway thay entrypoint nay
-bang composition root cua ung dung tuong ung.
+Entrypoint cua firmware Gateway. No khoi tao NVS, ESP-NETIF va default event
+loop, sau do chuyen sang `gateway_app_run()` de ghep Wi-Fi, Ethernet va CAN.

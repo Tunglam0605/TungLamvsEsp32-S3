@@ -1,6 +1,6 @@
-# Components architecture
+# Gateway components
 
-`main` chi chua cac tang dung chung:
+Firmware Gateway chia theo cac tang:
 
 ```text
 Product branch -> BSP -> Drivers
@@ -13,4 +13,5 @@ Product branch -> BSP -> Drivers
 | Drivers | Driver IC generic, khong biet ten san pham |
 | Platform | Provider Wi-Fi, NVS, time cua ESP-IDF |
 
-Callbox va Gateway la product component o nhanh rieng; khong nam tren `main`.
+`gateway` la lop product duy nhat tren nhanh nay; no su dung BSP va Platform
+nhung khong dua giao thuc nghiep vu vao cac lop dung chung.

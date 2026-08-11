@@ -4,8 +4,8 @@
     {
       "type": "gdbtarget",
       "request": "attach",
-      "name": "ESP32-S3 USB JTAG (Callbox)",
-      "program": "${workspaceFolder}\\build-win\\callbox_sews.elf",
+      "name": "ESP32-S3 USB JTAG (Gateway)",
+      "program": "${workspaceFolder}\\build-win\\aubot_gateway.elf",
       "cwd": "${workspaceFolder}",
       "runOpenOCD": true,
       "initialBreakpoint": "app_main"

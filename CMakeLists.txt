@@ -9,4 +9,4 @@ set(EXTRA_COMPONENT_DIRS components/drivers
                         components/platform)
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-project(esp32_s3_common)
+project(aubot_gateway)

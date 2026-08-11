@@ -1,21 +1,16 @@
-# ESP32-S3 Common Base
+# AUBOT ESP32-S3 Gateway
 
-`main` la nen dung chung cho Waveshare ESP32-S3-POE-ETH-8DI-8DO.
+Firmware Gateway cho board Waveshare ESP32-S3-POE-ETH-8DI-8DO.
 
-```text
-main                 BSP, driver generic, platform va firmware base
-callbox-esp32-s3     firmware Callbox rieng
-gateway-esp32-s3     firmware Gateway rieng
-```
+## Pham vi hien tai
 
-Main khong chua MQTT/WCS, portal, mapping nut, Laser protocol hay logic nghiep
-vu san pham. Firmware base chi khoi tao NVS, ESP-NETIF, event loop va BSP.
+- Wi-Fi AP + STA, STA mac dinh ket noi `Robotics AUBOT 1` bang DHCP.
+- AP commissioning: `AUBOT-GATEWAY`, IP `192.168.65.204`.
+- Ethernet W5500 DHCP.
+- CAN Classic cach ly: 250 kbps, Standard ID 11-bit, TX GPIO2 / RX GPIO3.
 
-## Thanh phan dung chung
-
-- `components/bsp`: DI, DO, buzzer, W5500 Ethernet, CAN Classic.
-- `components/drivers`: driver IC generic.
-- `components/platform`: Wi-Fi, NVS va time provider.
-- `main`: composition root toi thieu.
+Khong co logic nut nhan, den thap, Mission hay giao thuc thiet bi cu trong
+firmware Gateway. Protocol Laser/CAN va dich vu uplink se duoc them trong
+`components/gateway`.
 
 Build: `idf.py set-target esp32s3` va `idf.py build`.
