@@ -1048,15 +1048,6 @@ CONFIG_PARTITION_TABLE_MD5=y
 # end of Partition Table
 
 #
-# Callbox Security
-#
-# default:
-# CONFIG_CALLBOX_PRODUCTION_BUILD is not set
-# default:
-# CONFIG_CALLBOX_ALLOW_ANONYMOUS_MQTT is not set
-# end of Callbox Security
-
-#
 # Compiler options
 #
 # default:
