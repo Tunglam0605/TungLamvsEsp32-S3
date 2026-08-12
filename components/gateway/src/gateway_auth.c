@@ -1,4 +1,5 @@
 #include "gateway_auth.h"
+#include "gateway_web_theme.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -343,13 +344,11 @@ bool gateway_auth_require_api(httpd_req_t *request, gateway_permission_t permiss
 {
     gateway_auth_session_t current;
     if (!gateway_auth_session_from_request(request, &current)) {
-        httpd_resp_set_status(request, "401 Unauthorized");
-        (void)httpd_resp_sendstr(request, "Cần đăng nhập");
+        (void)gateway_web_send_text(request, "401 Unauthorized", "Cần đăng nhập");
         return false;
     }
     if (!gateway_auth_role_has_permission(current.role, permission)) {
-        httpd_resp_set_status(request, "403 Forbidden");
-        (void)httpd_resp_sendstr(request, "Không đủ quyền");
+        (void)gateway_web_send_text(request, "403 Forbidden", "Không đủ quyền");
         return false;
     }
     if (session) *session = current;
@@ -367,8 +366,7 @@ bool gateway_auth_require_page(httpd_req_t *request, gateway_permission_t permis
         return false;
     }
     if (!gateway_auth_role_has_permission(current.role, permission)) {
-        httpd_resp_set_status(request, "403 Forbidden");
-        (void)httpd_resp_sendstr(request, "Không đủ quyền truy cập");
+        (void)gateway_web_send_text(request, "403 Forbidden", "Không đủ quyền truy cập");
         return false;
     }
     if (session) *session = current;

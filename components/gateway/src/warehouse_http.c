@@ -233,9 +233,7 @@ static esp_err_t read_body(httpd_req_t *request, char *buffer, size_t capacity)
 
 static esp_err_t send_conflict(httpd_req_t *request, const char *message)
 {
-    httpd_resp_set_status(request, "409 Conflict");
-    httpd_resp_set_type(request, "text/plain; charset=utf-8");
-    return httpd_resp_sendstr(request, message);
+    return gateway_web_send_text(request, "409 Conflict", message);
 }
 
 static esp_err_t set_profile(httpd_req_t *request)
@@ -244,7 +242,7 @@ static esp_err_t set_profile(httpd_req_t *request)
     char body[128] = {0}, profile_name[16] = {0}, clear[4] = {0};
     if (read_body(request, body, sizeof(body)) != ESP_OK ||
         !field(body, "profile", profile_name, sizeof(profile_name))) {
-        return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Dữ liệu không hợp lệ");
+        return gateway_web_send_text(request, "400 Bad Request", "Dữ liệu không hợp lệ");
     }
     const laser_profile_t profile = strcmp(profile_name, "GROUP_12") == 0
         ? LASER_PROFILE_GROUP_12 : LASER_PROFILE_GROUP_8;
@@ -260,12 +258,12 @@ static esp_err_t set_position(httpd_req_t *request)
     if (!gateway_auth_require_api(request, GW_PERMISSION_WAREHOUSE_CONFIG, NULL)) return ESP_OK;
     char body[512] = {0}, value[64];
     if (read_body(request, body, sizeof(body)) != ESP_OK) {
-        return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Dữ liệu quá dài");
+        return gateway_web_send_text(request, "400 Bad Request", "Dữ liệu quá dài");
     }
     warehouse_position_config_t position = {0};
 #define READ_UINT(key, member) do { \
     if (!field(body, key, value, sizeof(value))) \
-        return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Thiếu trường " key); \
+        return gateway_web_send_text(request, "400 Bad Request", "Thiếu trường " key); \
     position.member = (typeof(position.member))strtoul(value, NULL, 10); \
 } while (0)
     READ_UINT("group_id", group_id);
@@ -287,8 +285,8 @@ static esp_err_t set_position(httpd_req_t *request)
         return send_conflict(request, warehouse_validation_name(validation));
     }
     if (warehouse_manager_set_position(&position) != ESP_OK) {
-        return httpd_resp_send_err(request, HTTPD_500_INTERNAL_SERVER_ERROR,
-                                   "Không thể lưu NVS");
+        return gateway_web_send_text(request, "500 Internal Server Error",
+                                     "Không thể lưu NVS");
     }
     return httpd_resp_sendstr(request, "{\"ok\":true}");
 }
@@ -299,11 +297,11 @@ static esp_err_t apply_laser(httpd_req_t *request)
     char body[64] = {0}, value[8] = {0};
     if (read_body(request, body, sizeof(body)) != ESP_OK ||
         !field(body, "group_id", value, sizeof(value)))
-        return httpd_resp_send_err(request, 400, "Thiếu Group");
+        return gateway_web_send_text(request, "400 Bad Request", "Thiếu Group");
     warehouse_position_t position;
     if (!warehouse_manager_get_position((uint8_t)atoi(value), &position) ||
         !position.config.enabled)
-        return httpd_resp_send_err(request, 409, "Vị trí chưa được bật");
+        return gateway_web_send_text(request, "409 Conflict", "Vị trí chưa được bật");
     const laser_can_config_request_t config = {
         .laser_id = position.config.laser_id,
         .distance_mm = position.config.distance_mm,

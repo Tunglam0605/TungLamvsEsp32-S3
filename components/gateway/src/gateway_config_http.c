@@ -157,7 +157,7 @@ static esp_err_t config_post(httpd_req_t *request)
     if (!gateway_auth_require_api(request, GW_PERMISSION_NETWORK_CONFIG, NULL)) return ESP_OK;
     char body[1024] = {0}, value[128];
     if (read_body(request, body, sizeof(body)) != ESP_OK)
-        return httpd_resp_send_err(request, 400, "Dữ liệu quá dài");
+        return gateway_web_send_text(request, "400 Bad Request", "Dữ liệu quá dài");
     gateway_config_t config;
     gateway_config_get(&config);
 #define SET_STRING(key, member) do { if (field(body, key, value, sizeof(value)) && value[0]) \
@@ -192,9 +192,11 @@ static esp_err_t config_post(httpd_req_t *request)
         field(body, "wifi_password", password, sizeof(password)) && password[0])
         (void)gateway_config_add_wifi(&config, ssid, password);
     const esp_err_t error = gateway_config_save(&config);
-    if (error != ESP_OK) return httpd_resp_send_err(request, 400, "Cấu hình không hợp lệ");
+    if (error != ESP_OK)
+        return gateway_web_send_text(request, "400 Bad Request", "Cấu hình không hợp lệ");
     if (xTaskCreate(apply_saved_config_task, "gw_cfg_apply", 4096, NULL, 5, NULL) != pdPASS)
-        return httpd_resp_send_err(request, 503, "Đã lưu nhưng chưa thể áp dụng ngay");
+        return gateway_web_send_text(request, "503 Service Unavailable",
+                                     "Đã lưu nhưng chưa thể áp dụng ngay");
     httpd_resp_set_type(request, "application/json");
     return httpd_resp_sendstr(request, "{\"ok\":true}");
 }
@@ -208,7 +210,7 @@ static esp_err_t scan(httpd_req_t *request)
         .show_hidden = false, .active_min_ms = 60, .active_max_ms = 120
     };
     if (platform_wifi_scan(&config, networks, &count) != ESP_OK)
-        return httpd_resp_send_err(request, 503, "WiFi đang bận");
+        return gateway_web_send_text(request, "503 Service Unavailable", "WiFi đang bận");
     httpd_resp_set_type(request, "application/json");
     httpd_resp_send_chunk(request, "{\"networks\":[", 13U);
     char json[96];
@@ -258,9 +260,10 @@ static esp_err_t ap_control(httpd_req_t *request)
     char body[32] = {0}, enabled[8] = {0};
     if (read_body(request, body, sizeof(body)) != ESP_OK ||
         !field(body, "enabled", enabled, sizeof(enabled)))
-        return httpd_resp_send_err(request, 400, "Thiếu trạng thái AP");
+        return gateway_web_send_text(request, "400 Bad Request", "Thiếu trạng thái AP");
     if (gateway_network_set_ap(atoi(enabled) != 0) != ESP_OK)
-        return httpd_resp_send_err(request, 500, "Không thể đổi trạng thái AP");
+        return gateway_web_send_text(request, "500 Internal Server Error",
+                                     "Không thể đổi trạng thái AP");
     return httpd_resp_sendstr(request, "{\"ok\":true}");
 }
 

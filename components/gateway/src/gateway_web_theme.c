@@ -60,6 +60,15 @@ esp_err_t gateway_web_send_html(httpd_req_t *request, const char *html)
     return httpd_resp_send_chunk(request, NULL, 0U);
 }
 
+esp_err_t gateway_web_send_text(httpd_req_t *request, const char *status,
+                                const char *text)
+{
+    if (status != NULL) httpd_resp_set_status(request, status);
+    httpd_resp_set_type(request, "text/plain; charset=utf-8");
+    httpd_resp_set_hdr(request, "Cache-Control", "no-store");
+    return httpd_resp_sendstr(request, text != NULL ? text : "");
+}
+
 static esp_err_t ui_status_handler(httpd_req_t *request)
 {
     gateway_config_t config;

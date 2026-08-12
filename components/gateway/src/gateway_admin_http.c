@@ -87,9 +87,11 @@ static esp_err_t enabled_post(httpd_req_t *request)
     if (!read_body(request, body, sizeof(body)) ||
         !field(body, "username", username, sizeof(username)) ||
         !field(body, "enabled", enabled, sizeof(enabled)))
-        return httpd_resp_send_err(request, 400, "Dữ liệu không hợp lệ");
+        return gateway_web_send_text(request, "400 Bad Request", "Dữ liệu không hợp lệ");
     const esp_err_t error = gateway_auth_set_enabled(username, strcmp(enabled, "1") == 0);
-    if (error != ESP_OK) return httpd_resp_send_err(request, 400, "Không thể đổi trạng thái tài khoản");
+    if (error != ESP_OK)
+        return gateway_web_send_text(request, "400 Bad Request",
+                                     "Không thể đổi trạng thái tài khoản");
     return httpd_resp_sendstr(request, "{\"ok\":true}");
 }
 
@@ -99,12 +101,14 @@ static esp_err_t password_post(httpd_req_t *request)
     char body[320] = {0}, username[24] = {0}, password[65] = {0}, reset[4] = {0};
     if (!read_body(request, body, sizeof(body)) ||
         !field(body, "username", username, sizeof(username)))
-        return httpd_resp_send_err(request, 400, "Dữ liệu không hợp lệ");
+        return gateway_web_send_text(request, "400 Bad Request", "Dữ liệu không hợp lệ");
     const esp_err_t error = field(body, "reset", reset, sizeof(reset)) && strcmp(reset, "1") == 0
         ? gateway_auth_reset_password(username)
         : field(body, "new_password", password, sizeof(password))
             ? gateway_auth_set_password(username, password) : ESP_ERR_INVALID_ARG;
-    if (error != ESP_OK) return httpd_resp_send_err(request, 400, "Mật khẩu phải từ 8 đến 64 ký tự");
+    if (error != ESP_OK)
+        return gateway_web_send_text(request, "400 Bad Request",
+                                     "Mật khẩu phải từ 8 đến 64 ký tự");
     return httpd_resp_sendstr(request, "{\"ok\":true}");
 }
 

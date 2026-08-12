@@ -79,9 +79,8 @@ static esp_err_t login_post(httpd_req_t *request)
     if (!gateway_auth_login_allowed(esp_timer_get_time() / 1000LL, &retry)) {
         char value[16];
         snprintf(value, sizeof(value), "%" PRIu32, retry);
-        httpd_resp_set_status(request, "429 Too Many Requests");
         httpd_resp_set_hdr(request, "Retry-After", value);
-        return httpd_resp_sendstr(request, "Thử lại sau");
+        return gateway_web_send_text(request, "429 Too Many Requests", "Thử lại sau");
     }
     char body[320] = {0}, username[24] = {0}, password[65] = {0}, token[65];
     gateway_auth_session_t session;
@@ -89,8 +88,8 @@ static esp_err_t login_post(httpd_req_t *request)
         !field(body, "username", username, sizeof(username)) ||
         !field(body, "password", password, sizeof(password)) ||
         !gateway_auth_authenticate(username, password, &session, token, sizeof(token))) {
-        httpd_resp_set_status(request, "401 Unauthorized");
-        return httpd_resp_sendstr(request, "Sai tài khoản hoặc mật khẩu");
+        return gateway_web_send_text(request, "401 Unauthorized",
+                                     "Sai tài khoản hoặc mật khẩu");
     }
     char cookie[160];
     snprintf(cookie, sizeof(cookie), "GWSESSION=%s; Max-Age=1800; HttpOnly; SameSite=Strict; Path=/", token);
@@ -129,16 +128,16 @@ static esp_err_t change_password(httpd_req_t *request)
 {
     gateway_auth_session_t session;
     if (!gateway_auth_session_from_request(request, &session)) {
-        httpd_resp_set_status(request, "401 Unauthorized");
-        return httpd_resp_sendstr(request, "Cần đăng nhập");
+        return gateway_web_send_text(request, "401 Unauthorized", "Cần đăng nhập");
     }
     char body[512] = {0}, current[65] = {0}, password[65] = {0};
     if (!body_read(request, body, sizeof(body)) ||
         !field(body, "current_password", current, sizeof(current)) ||
         !field(body, "new_password", password, sizeof(password)))
-        return httpd_resp_send_err(request, 400, "Dữ liệu không hợp lệ");
+        return gateway_web_send_text(request, "400 Bad Request", "Dữ liệu không hợp lệ");
     const esp_err_t error = gateway_auth_change_password(session.username, current, password);
-    if (error != ESP_OK) return httpd_resp_send_err(request, 400, "Không thể đổi mật khẩu");
+    if (error != ESP_OK)
+        return gateway_web_send_text(request, "400 Bad Request", "Không thể đổi mật khẩu");
     httpd_resp_set_hdr(request, "Set-Cookie",
         "GWSESSION=; Max-Age=0; HttpOnly; SameSite=Strict; Path=/");
     httpd_resp_set_type(request, "application/json; charset=utf-8");
