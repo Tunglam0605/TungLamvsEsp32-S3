@@ -43,6 +43,7 @@ extern "C" {
 typedef struct {
     uint16_t id;
     uint8_t dlc;
+    bool is_remote;
     uint8_t data[BSP_CAN_MAX_DLC];
 } bsp_can_frame_t;
 
@@ -61,6 +62,27 @@ typedef struct {
     uint16_t rx_error_count;
     uint32_t bus_error_count;
     uint32_t rx_queue_overflow_count;
+    uint32_t tx_success_count;
+    uint32_t tx_failed_count;
+    uint32_t rx_callback_count;
+    uint32_t rx_enqueued_count;
+    uint32_t rx_read_failed_count;
+    uint32_t rx_rejected_count;
+    uint32_t rx_rejected_ide_count;
+    uint32_t rx_rejected_rtr_count;
+    uint32_t rx_rejected_fdf_count;
+    uint32_t rx_rejected_id_count;
+    uint32_t rx_rejected_dlc_count;
+    uint32_t last_rejected_id;
+    uint8_t last_rejected_dlc;
+    uint8_t last_rejected_flags;
+    uint32_t error_callback_count;
+    uint32_t arbitration_lost_count;
+    uint32_t bit_error_count;
+    uint32_t form_error_count;
+    uint32_t stuff_error_count;
+    uint32_t ack_error_count;
+    uint32_t last_error_flags;
 } bsp_can_status_t;
 
 /**

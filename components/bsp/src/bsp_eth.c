@@ -56,6 +56,8 @@ static const char *TAG = "BSP_ETH";
 
 static esp_eth_handle_t s_eth_handle;
 static bool s_eth_initialized;
+static bool s_eth_link_up;
+static esp_netif_t *s_eth_netif;
 static bool s_eth_has_ip;
 static char s_eth_ip[16];
 static char s_eth_gateway[16];
@@ -82,8 +84,10 @@ static void eth_event_handler(void *arg, esp_event_base_t event_base,
                               int32_t event_id, void *event_data)
 {
     if (event_id == ETHERNET_EVENT_CONNECTED) {
+        s_eth_link_up = true;
         ESP_LOGI(TAG, "W5500 link up");
     } else if (event_id == ETHERNET_EVENT_DISCONNECTED) {
+        s_eth_link_up = false;
         s_eth_has_ip = false;
         s_eth_ip[0] = '\0';
         s_eth_gateway[0] = '\0';
@@ -129,7 +133,42 @@ static esp_err_t w5500_reset(void)
     return ESP_OK;
 }
 
-esp_err_t bsp_eth_init(void)
+static void update_ip_status(void)
+{
+    esp_netif_ip_info_t info = { 0 };
+    if (s_eth_netif != NULL && esp_netif_get_ip_info(s_eth_netif, &info) == ESP_OK &&
+        info.ip.addr != 0U) {
+        s_eth_has_ip = true;
+        snprintf(s_eth_ip, sizeof(s_eth_ip), IPSTR, IP2STR(&info.ip));
+        snprintf(s_eth_gateway, sizeof(s_eth_gateway), IPSTR, IP2STR(&info.gw));
+    }
+}
+
+esp_err_t bsp_eth_apply_network_config(const bsp_eth_network_config_t *config)
+{
+    if (s_eth_netif == NULL || config == NULL) return ESP_ERR_INVALID_STATE;
+    if (config->dhcp) {
+        const esp_err_t err = esp_netif_dhcpc_start(s_eth_netif);
+        return err == ESP_ERR_ESP_NETIF_DHCP_ALREADY_STARTED ? ESP_OK : err;
+    }
+    esp_err_t err = esp_netif_dhcpc_stop(s_eth_netif);
+    if (err != ESP_OK && err != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED) return err;
+    esp_netif_ip_info_t info = { 0 };
+    if (esp_netif_str_to_ip4(config->ip, &info.ip) != ESP_OK ||
+        esp_netif_str_to_ip4(config->netmask, &info.netmask) != ESP_OK ||
+        esp_netif_str_to_ip4(config->gateway, &info.gw) != ESP_OK) return ESP_ERR_INVALID_ARG;
+    ESP_RETURN_ON_ERROR(esp_netif_set_ip_info(s_eth_netif, &info), TAG, "set static Ethernet IP");
+    if (config->dns != NULL && config->dns[0] != '\0') {
+        esp_netif_dns_info_t dns = { 0 };
+        dns.ip.type = ESP_IPADDR_TYPE_V4;
+        if (esp_netif_str_to_ip4(config->dns, &dns.ip.u_addr.ip4) != ESP_OK) return ESP_ERR_INVALID_ARG;
+        ESP_RETURN_ON_ERROR(esp_netif_set_dns_info(s_eth_netif, ESP_NETIF_DNS_MAIN, &dns), TAG, "set Ethernet DNS");
+    }
+    update_ip_status();
+    return ESP_OK;
+}
+
+esp_err_t bsp_eth_init_with_config(const bsp_eth_network_config_t *config)
 {
     /* Bảo vệ: nếu driver đã cài đặt thì không khởi tạo lại (tránh hỏng SPI). */
     if (s_eth_handle != NULL) {
@@ -243,6 +282,9 @@ esp_err_t bsp_eth_init(void)
                       "create W5500 netif glue");
     ESP_GOTO_ON_ERROR(esp_netif_attach(netif, netif_glue), fail, TAG,
                       "attach W5500 netif");
+    s_eth_netif = netif;
+    ESP_GOTO_ON_ERROR(bsp_eth_apply_network_config(config), fail, TAG,
+                      "configure Ethernet addressing");
 
     /* BƯỚC 7 — Đăng ký sự kiện link và sự kiện có IP. */
     ESP_GOTO_ON_ERROR(esp_event_handler_register(ETH_EVENT, ESP_EVENT_ANY_ID,
@@ -268,6 +310,7 @@ esp_err_t bsp_eth_init(void)
     return ESP_OK;
 
 fail:
+    s_eth_netif = NULL;
     s_eth_handle = NULL;
     s_eth_initialized = false;
     s_eth_has_ip = false;
@@ -349,9 +392,23 @@ fail:
     return ret;
 }
 
+esp_err_t bsp_eth_init(void)
+{
+    const bsp_eth_network_config_t config = {
+        .dhcp = false, .ip = "169.254.1.1", .netmask = "255.255.0.0",
+        .gateway = "0.0.0.0", .dns = NULL,
+    };
+    return bsp_eth_init_with_config(&config);
+}
+
 bool bsp_eth_is_connected(void)
 {
     return s_eth_has_ip;
+}
+
+bool bsp_eth_link_is_up(void)
+{
+    return s_eth_link_up;
 }
 
 void bsp_eth_get_status(bsp_eth_status_t *status)

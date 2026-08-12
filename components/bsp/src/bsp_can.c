@@ -38,6 +38,27 @@ static twai_node_handle_t s_node;
 static QueueHandle_t s_rx_queue;
 /* Tang trong ISR khi RX nhanh hon Task consumer; chi dung de chan doan. */
 static volatile uint32_t s_rx_queue_overflow_count;
+static volatile uint32_t s_tx_success_count;
+static volatile uint32_t s_tx_failed_count;
+static volatile uint32_t s_rx_callback_count;
+static volatile uint32_t s_rx_enqueued_count;
+static volatile uint32_t s_rx_read_failed_count;
+static volatile uint32_t s_rx_rejected_count;
+static volatile uint32_t s_rx_rejected_ide_count;
+static volatile uint32_t s_rx_rejected_rtr_count;
+static volatile uint32_t s_rx_rejected_fdf_count;
+static volatile uint32_t s_rx_rejected_id_count;
+static volatile uint32_t s_rx_rejected_dlc_count;
+static volatile uint32_t s_last_rejected_id;
+static volatile uint8_t s_last_rejected_dlc;
+static volatile uint8_t s_last_rejected_flags;
+static volatile uint32_t s_error_callback_count;
+static volatile uint32_t s_arbitration_lost_count;
+static volatile uint32_t s_bit_error_count;
+static volatile uint32_t s_form_error_count;
+static volatile uint32_t s_stuff_error_count;
+static volatile uint32_t s_ack_error_count;
+static volatile uint32_t s_last_error_flags;
 
 /* Callback chay trong ISR context. Khong duoc dung API block, malloc, log hay
  * decode protocol o day. Driver yeu cau twai_node_receive_from_isr() duoc goi
@@ -49,6 +70,7 @@ static IRAM_ATTR bool can_rx_done_callback(twai_node_handle_t handle,
     (void)event;
     (void)user_context;
 
+    ++s_rx_callback_count;
     /* Buffer stack co kich thuoc Classic CAN toi da 8 byte. */
     uint8_t data[BSP_CAN_MAX_DLC] = { 0 };
     twai_frame_t rx = {
@@ -57,16 +79,29 @@ static IRAM_ATTR bool can_rx_done_callback(twai_node_handle_t handle,
     };
     /* BSP chi chuyen Standard Classic Data frame. Extended/RTR/FD duoc loai
      * ngay tai bien hardware de application khong nham protocol. */
-    if (twai_node_receive_from_isr(handle, &rx) != ESP_OK ||
-        rx.header.ide || rx.header.rtr || rx.header.fdf ||
-        rx.header.id > BSP_CAN_STANDARD_ID_MAX ||
+    if (twai_node_receive_from_isr(handle, &rx) != ESP_OK) {
+        ++s_rx_read_failed_count;
+        return false;
+    }
+    if (rx.header.ide || rx.header.fdf || rx.header.id > BSP_CAN_STANDARD_ID_MAX ||
         rx.header.dlc > BSP_CAN_MAX_DLC) {
+        ++s_rx_rejected_count;
+        s_rx_rejected_ide_count += rx.header.ide ? 1U : 0U;
+        s_rx_rejected_fdf_count += rx.header.fdf ? 1U : 0U;
+        s_rx_rejected_id_count += rx.header.id > BSP_CAN_STANDARD_ID_MAX ? 1U : 0U;
+        s_rx_rejected_dlc_count += rx.header.dlc > BSP_CAN_MAX_DLC ? 1U : 0U;
+        s_last_rejected_id = rx.header.id;
+        s_last_rejected_dlc = rx.header.dlc;
+        s_last_rejected_flags = (rx.header.ide ? 1U : 0U) |
+                                (rx.header.rtr ? 2U : 0U) |
+                                (rx.header.fdf ? 4U : 0U);
         return false;
     }
 
     bsp_can_frame_t frame = {
         .id = (uint16_t)rx.header.id,
         .dlc = (uint8_t)rx.header.dlc,
+        .is_remote = rx.header.rtr,
     };
     if (frame.dlc > 0U) {
         memcpy(frame.data, data, frame.dlc);
@@ -76,6 +111,8 @@ static IRAM_ATTR bool can_rx_done_callback(twai_node_handle_t handle,
     BaseType_t higher_priority_task_woken = pdFALSE;
     if (xQueueSendFromISR(s_rx_queue, &frame, &higher_priority_task_woken) != pdPASS) {
         ++s_rx_queue_overflow_count;
+    } else {
+        ++s_rx_enqueued_count;
     }
     return higher_priority_task_woken == pdTRUE;
 }
@@ -87,8 +124,25 @@ static IRAM_ATTR bool can_error_callback(twai_node_handle_t handle,
                                          void *user_context)
 {
     (void)handle;
-    (void)event;
     (void)user_context;
+    ++s_error_callback_count;
+    s_last_error_flags = event->err_flags.val;
+    s_arbitration_lost_count += event->err_flags.arb_lost ? 1U : 0U;
+    s_bit_error_count += event->err_flags.bit_err ? 1U : 0U;
+    s_form_error_count += event->err_flags.form_err ? 1U : 0U;
+    s_stuff_error_count += event->err_flags.stuff_err ? 1U : 0U;
+    s_ack_error_count += event->err_flags.ack_err ? 1U : 0U;
+    return false;
+}
+
+static IRAM_ATTR bool can_tx_done_callback(twai_node_handle_t handle,
+                                            const twai_tx_done_event_data_t *event,
+                                            void *user_context)
+{
+    (void)handle;
+    (void)user_context;
+    if (event->is_tx_success) ++s_tx_success_count;
+    else ++s_tx_failed_count;
     return false;
 }
 
@@ -148,6 +202,7 @@ esp_err_t bsp_can_init(void)
 
     /* Register callback truoc enable de khong bo sot frame den ngay sau start. */
     const twai_event_callbacks_t callbacks = {
+        .on_tx_done = can_tx_done_callback,
         .on_rx_done = can_rx_done_callback,
         .on_error = can_error_callback,
     };
@@ -164,6 +219,13 @@ esp_err_t bsp_can_init(void)
     }
 
     s_rx_queue_overflow_count = 0;
+    s_tx_success_count = s_tx_failed_count = 0;
+    s_rx_callback_count = s_rx_enqueued_count = s_rx_read_failed_count = 0;
+    s_rx_rejected_count = s_rx_rejected_ide_count = s_rx_rejected_rtr_count = 0;
+    s_rx_rejected_fdf_count = s_rx_rejected_id_count = s_rx_rejected_dlc_count = 0;
+    s_last_rejected_id = s_last_rejected_dlc = s_last_rejected_flags = 0;
+    s_error_callback_count = s_arbitration_lost_count = s_bit_error_count = 0;
+    s_form_error_count = s_stuff_error_count = s_ack_error_count = s_last_error_flags = 0;
     ESP_LOGI(TAG, "CAN ready: Classic 250 kbps, TX GPIO%d RX GPIO%d",
              BSP_CAN_TX_GPIO, BSP_CAN_RX_GPIO);
     return ESP_OK;
@@ -207,6 +269,7 @@ esp_err_t bsp_can_send(const bsp_can_frame_t *frame, uint32_t timeout_ms)
         .header = {
             .id = frame->id,
             .dlc = frame->dlc,
+            .rtr = frame->is_remote,
         },
         .buffer = (uint8_t *)frame->data,
         .buffer_len = frame->dlc,
@@ -239,6 +302,27 @@ void bsp_can_get_status(bsp_can_status_t *status)
     status->initialized = s_node != NULL;
     status->state = BSP_CAN_STATE_STOPPED;
     status->rx_queue_overflow_count = s_rx_queue_overflow_count;
+    status->tx_success_count = s_tx_success_count;
+    status->tx_failed_count = s_tx_failed_count;
+    status->rx_callback_count = s_rx_callback_count;
+    status->rx_enqueued_count = s_rx_enqueued_count;
+    status->rx_read_failed_count = s_rx_read_failed_count;
+    status->rx_rejected_count = s_rx_rejected_count;
+    status->rx_rejected_ide_count = s_rx_rejected_ide_count;
+    status->rx_rejected_rtr_count = s_rx_rejected_rtr_count;
+    status->rx_rejected_fdf_count = s_rx_rejected_fdf_count;
+    status->rx_rejected_id_count = s_rx_rejected_id_count;
+    status->rx_rejected_dlc_count = s_rx_rejected_dlc_count;
+    status->last_rejected_id = s_last_rejected_id;
+    status->last_rejected_dlc = s_last_rejected_dlc;
+    status->last_rejected_flags = s_last_rejected_flags;
+    status->error_callback_count = s_error_callback_count;
+    status->arbitration_lost_count = s_arbitration_lost_count;
+    status->bit_error_count = s_bit_error_count;
+    status->form_error_count = s_form_error_count;
+    status->stuff_error_count = s_stuff_error_count;
+    status->ack_error_count = s_ack_error_count;
+    status->last_error_flags = s_last_error_flags;
     if (s_node == NULL) {
         return;
     }

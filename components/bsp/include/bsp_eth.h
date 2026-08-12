@@ -48,8 +48,19 @@ typedef struct {
     char gateway[16];
 } bsp_eth_status_t;
 
+typedef struct {
+    bool dhcp;
+    const char *ip;
+    const char *netmask;
+    const char *gateway;
+    const char *dns;
+} bsp_eth_network_config_t;
+
 esp_err_t bsp_eth_init(void);
+esp_err_t bsp_eth_init_with_config(const bsp_eth_network_config_t *config);
+esp_err_t bsp_eth_apply_network_config(const bsp_eth_network_config_t *config);
 bool bsp_eth_is_connected(void);
+bool bsp_eth_link_is_up(void);
 void bsp_eth_get_status(bsp_eth_status_t *status);
 
 #ifdef __cplusplus
