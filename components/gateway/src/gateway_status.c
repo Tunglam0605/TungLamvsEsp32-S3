@@ -75,9 +75,6 @@ static void status_task(void *arg)
         const bool mqtt = gateway_mqtt_is_connected();
         const bool network = gateway_network_is_connected();
 
-        /* AP la kenh cuu ho: chi ton tai khi MQTT chua san sang. */
-        if (!mqtt && !platform_wifi_ap_is_active()) (void)platform_wifi_ap_start();
-        if (mqtt && platform_wifi_ap_is_active()) (void)platform_wifi_ap_stop();
         const bool ap = platform_wifi_ap_is_active();
 
         if (!initialized) {
