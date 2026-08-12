@@ -16,6 +16,7 @@
 #include "gateway_auth.h"
 #include "gateway_mqtt.h"
 #include "gateway_network.h"
+#include "gateway_output.h"
 #include "gateway_status.h"
 #include "laser_can_bringup.h"
 #include "platform_wifi.h"
@@ -43,14 +44,23 @@ esp_err_t gateway_app_run(void)
 
     err = gateway_auth_init();
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Cannot initialize Gateway accounts: %s", esp_err_to_name(err));
-        return err;
+        /* Authentication/WebUI is an auxiliary plane. CAN, warehouse and MQTT
+         * must keep running; protected routes fail closed until auth recovers. */
+        ESP_LOGE(TAG, "Gateway accounts unavailable; protected WebUI disabled: %s",
+                 esp_err_to_name(err));
     }
 
     err = bsp_board_init();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Cannot initialize board I/O and buzzer: %s", esp_err_to_name(err));
         return err;
+    }
+
+    err = gateway_output_start();
+    if (err != ESP_OK) {
+        /* gateway_output_start() has already attempted all-OFF fail-safe. */
+        ESP_LOGE(TAG, "Physical outputs disabled in fail-safe OFF state: %s",
+                 esp_err_to_name(err));
     }
 
     /* APSTA khong phu thuoc Ethernet hay CAN: khi LAN/CAN chua cam, ky thuat

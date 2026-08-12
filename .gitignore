@@ -19,6 +19,14 @@
 /tools/*.py[cod]
 /tools/mqtt_background*.log
 
+# Local bench/build artifacts (never part of a firmware branch)
+/*.log
+/0
+/tools/*.log
+/tools/logs/
+/tools/monitor_laser_reset_hotplug.ps1
+/docs/CallBox_SEWS_IT_WCS_Integration_Handoff_v1.0.docx
+
 # Production signing keys are provisioned outside Git.
 /keys/
 /secure_boot_signing_key.pem

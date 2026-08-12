@@ -13,21 +13,24 @@ Production domain hierarchy:
 - Status byte 7 (`Warn`) remains the authoritative current-state input. Group CAN events are auxiliary fast events and diagnostic counters only.
 - Tower RED/YELLOW/GREEN DO mapping is TBD; no output channel is guessed or energized.
 
-## MQTT contract: JSON_WAREHOUSE_V1
+## MQTT contract: WAREHOUSE_STATUS_V1
 
-All topics use the logical `gateway_id` stored in NVS:
+Contract tích hợp chính thức nằm tại
+[GATEWAY_MQTT_CONTRACT_V1.md](GATEWAY_MQTT_CONTRACT_V1.md). Tóm tắt namespace:
 
-| Topic | QoS | Retain | Direction |
-|---|---:|---:|---|
-| `gateway/{gateway_id}/availability` | 1 | yes | Gateway → WCS; also Last Will |
-| `gateway/{gateway_id}/status` | 1 | yes | Gateway → WCS full current snapshot |
-| `gateway/{gateway_id}/event` | 1 | no | Gateway → WCS state transition / pong |
-| `gateway/{gateway_id}/cmd` | 1 | no | WCS → Gateway |
+```text
+warehouse/sensor/{company_id}/{site_id}/{warehouse_id}/status/json
+warehouse/sensor/{company_id}/{site_id}/{warehouse_id}/status/bits
+```
 
-- `status` contains only enabled positions. `summary.total` is the number of enabled positions and always equals `empty + occupied + unknown`.
-- `boot_id` is regenerated at boot. `seq` increases monotonically during that boot and resets with the next `boot_id`.
-- A full retained snapshot is sent immediately after connect/reconnect, after a current-state/config change, on `request_snapshot`, and periodically.
-- `cmd` v1 accepts only `request_snapshot` and `ping`. It cannot set warehouse state or configure a Laser.
+- Hai topic status dùng QoS 1, retained và được tạo từ cùng snapshot.
+- Snapshot luôn giữ đủ 8/12 vị trí. `EMPTY=00`, `OCCUPIED=01`,
+  `UNKNOWN=10`, `FAULT=11`.
+- `warehouse_id` là khóa tích hợp ổn định; `warehouse_name` chỉ là tên hiển thị.
+- `gateway_id` vẫn dùng cho định danh thiết bị nhưng không nằm trong topic kho.
+- Chỉ `status/json` và `status/bits` thuộc contract MQTT ngoài; không có
+  `event`, `cmd` hoặc `availability` riêng.
+- A full retained snapshot is sent immediately after connect/reconnect, after a current-state/config change, and periodically.
 - TCP MQTT does not wait for SNTP. TLS waits for valid time before certificate validation.
 - No state history is replayed by the Gateway; WCS owns history.
 
@@ -43,8 +46,7 @@ Manual verification matrix:
 | Duplicate warehouse code | HTTP 409 `DUPLICATE_WAREHOUSE_CODE` |
 | Distance_E > Distance | HTTP 409 `INVALID_DISTANCE` |
 | Warn 0 / 1 / 2 | EMPTY / OCCUPIED / OCCUPIED |
-| Sensor timeout/offline | UNKNOWN |
+| Sensor timeout/offline ở vị trí đã cấu hình | FAULT |
 | ETH debug has IP | production network remains false |
 | ETH uplink has IP | production network true |
 | MQTT reconnect | immediate current snapshot requested |
-| MQTT `request_snapshot` | immediate current snapshot requested |

@@ -17,7 +17,7 @@ extern "C" {
 #endif
 
 /**
- * @brief Khởi động task quan sát CAN và heartbeat discovery mỗi 2 giây.
+ * @brief Khởi động task quan sát CAN và heartbeat discovery mỗi 500 ms.
  *
  * Heartbeat là Standard CAN ID 0x001, DLC 0. Sensor đang online được kỳ vọng
  * trả status trên ID 20 + LaserID. Hàm idempotent để gateway_app_run không

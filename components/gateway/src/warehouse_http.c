@@ -12,6 +12,7 @@
 #include "gateway_config.h"
 #include "gateway_mqtt.h"
 #include "gateway_network.h"
+#include "gateway_topic.h"
 #include "bsp_can.h"
 
 #if 0
@@ -116,15 +117,30 @@ static size_t json_escape(char *output, size_t capacity, const char *input)
 
 static esp_err_t status(httpd_req_t *request)
 {
-    if (!gateway_auth_require_api(request, GW_PERMISSION_WAREHOUSE_CONFIG, NULL)) return ESP_OK;
+    gateway_auth_session_t session;
+    if (!gateway_auth_require_api(request, GW_PERMISSION_WAREHOUSE_CONFIG, &session)) return ESP_OK;
     warehouse_snapshot_t snapshot;
     warehouse_manager_snapshot(&snapshot);
-    char buffer[640];
+    gateway_config_t config;
+    gateway_config_get(&config);
+    gateway_topic_set_t topics = {0};
+    (void)gateway_topic_build_set(&config, &topics);
+    char warehouse_id[72], warehouse_name[160], topic_json[400], topic_bits[400];
+    json_escape(warehouse_id, sizeof(warehouse_id), config.warehouse_id);
+    json_escape(warehouse_name, sizeof(warehouse_name), config.warehouse_name);
+    json_escape(topic_json, sizeof(topic_json), topics.status_json);
+    json_escape(topic_bits, sizeof(topic_bits), topics.status_bits);
+    char buffer[960];
     int length = snprintf(buffer, sizeof(buffer),
         "{\"profile\":\"%s\",\"group_count\":%u,\"configured\":%u,\"online\":%u,"
+        "\"warehouse_id\":\"%s\",\"warehouse_name\":\"%s\","
+        "\"can_edit_identity\":%s,\"topic_json\":\"%s\",\"topic_bits\":\"%s\","
         "\"unknown\":%u,\"empty\":%u,\"occupied\":%u,\"positions\":[",
         laser_profile_name(snapshot.profile), snapshot.group_count, snapshot.configured,
-        snapshot.online, snapshot.unknown, snapshot.empty, snapshot.occupied);
+        snapshot.online, warehouse_id, warehouse_name,
+        gateway_auth_role_has_permission(session.role, GW_PERMISSION_WAREHOUSE_IDENTITY)
+            ? "true" : "false",
+        topic_json, topic_bits, snapshot.unknown, snapshot.empty, snapshot.occupied);
     httpd_resp_set_type(request, "application/json");
     httpd_resp_send_chunk(request, buffer, length);
 
@@ -135,15 +151,17 @@ static esp_err_t status(httpd_req_t *request)
         char name[WAREHOUSE_NAME_LEN * 2U];
         json_escape(code, sizeof(code), position->config.warehouse_code);
         json_escape(name, sizeof(name), position->config.warehouse_name);
-        laser_profile_group_definition(snapshot.profile, i + 1U, &group);
+        const bool has_group = position->config.group_id != 0U &&
+            laser_profile_group_definition(snapshot.profile, position->config.group_id, &group);
         length = snprintf(buffer, sizeof(buffer),
-            "%s{\"group_id\":%u,\"enabled\":%s,\"proximity_enabled\":%s,\"laser_id\":%u,"
+            "%s{\"position_id\":%u,\"group_id\":%u,\"enabled\":%s,\"proximity_enabled\":%s,\"laser_id\":%u,"
             "\"allowed_first\":%u,\"allowed_last\":%u,\"warehouse_code\":\"%s\",\"warehouse_name\":\"%s\","
             "\"state\":\"%s\",\"sensor_online\":%s,\"last_seen_ago_ms\":%lld,\"warn\":\"%s\","
             "\"config_distance_mm\":%u,\"config_emergency_mm\":%u,\"low_col\":%u,\"high_row\":%u}",
-            i ? "," : "", i + 1U, position->config.enabled ? "true" : "false",
+            i ? "," : "", i + 1U, position->config.group_id,
+            position->config.enabled ? "true" : "false",
             position->config.proximity_enabled ? "true" : "false", position->config.laser_id,
-            group.laser_id_first, group.laser_id_last, code, name,
+            has_group ? group.laser_id_first : 0U, has_group ? group.laser_id_last : 0U, code, name,
             warehouse_state_name(position->state), position->sensor_online ? "true" : "false",
             position->last_seen_ago_ms, laser_can_obstacle_state_name(position->warn),
             position->config.distance_mm, position->config.distance_emergency_mm,
@@ -162,15 +180,18 @@ static esp_err_t public_status(httpd_req_t *request)
     gateway_config_get(&config);
     bsp_can_status_t can = {0};
     bsp_can_get_status(&can);
-    char gateway_id[40], network_name[96];
+    char gateway_id[40], network_name[96], warehouse_id[72], warehouse_name[160];
     json_escape(gateway_id, sizeof(gateway_id), config.gateway_id);
     json_escape(network_name, sizeof(network_name), gateway_network_active_name());
-    char buffer[520];
+    json_escape(warehouse_id, sizeof(warehouse_id), config.warehouse_id);
+    json_escape(warehouse_name, sizeof(warehouse_name), config.warehouse_name);
+    char buffer[720];
     int length = snprintf(buffer, sizeof(buffer),
-        "{\"gateway\":\"%s\",\"profile\":\"%s\",\"online\":%u,\"empty\":%u,"
+        "{\"gateway\":\"%s\",\"warehouse_id\":\"%s\",\"warehouse_name\":\"%s\","
+        "\"position_count\":%u,\"online\":%u,\"empty\":%u,"
         "\"occupied\":%u,\"unknown\":%u,\"network\":{\"connected\":%s,\"name\":\"%s\"},"
         "\"mqtt\":%s,\"can\":\"%s\",\"positions\":[",
-        gateway_id, laser_profile_name(snapshot.profile), snapshot.online,
+        gateway_id, warehouse_id, warehouse_name, snapshot.group_count, snapshot.online,
         snapshot.empty, snapshot.occupied, snapshot.unknown,
         gateway_network_production_available() ? "true" : "false",
         network_name, gateway_mqtt_is_connected() ? "true" : "false",
@@ -185,10 +206,10 @@ static esp_err_t public_status(httpd_req_t *request)
         char code[WAREHOUSE_CODE_LEN * 2U];
         json_escape(code, sizeof(code), position->config.warehouse_code);
         length = snprintf(buffer, sizeof(buffer),
-            "%s{\"group_id\":%u,\"laser_id\":%u,\"warehouse_code\":\"%s\","
-            "\"state\":\"%s\",\"sensor_online\":%s}", i ? "," : "",
-            i + 1U, position->config.laser_id, code,
-            warehouse_state_name(position->state), position->sensor_online ? "true" : "false");
+            "%s{\"position_id\":%u,\"warehouse_code\":\"%s\","
+            "\"state\":\"%s\"}", i ? "," : "",
+            i + 1U, code,
+            warehouse_state_name(position->state));
         httpd_resp_send_chunk(request, buffer, length);
     }
     httpd_resp_send_chunk(request, "]}", 2U);
@@ -212,6 +233,23 @@ static esp_err_t factory_lasers(httpd_req_t *request)
         error = httpd_resp_send_chunk(request, json, length);
         first = false;
     }
+    if (error == ESP_OK) error = httpd_resp_send_chunk(request, "],\"groups\":[", 12U);
+    const laser_profile_t profile = warehouse_manager_profile();
+    const uint8_t group_count = laser_profile_group_count(profile);
+    for (uint8_t group_id=1U; error==ESP_OK && group_id<=group_count; ++group_id) {
+        laser_group_definition_t definition={0};
+        (void)laser_profile_group_definition(profile,group_id,&definition);
+        uint8_t online=0U;
+        for(uint8_t id=definition.laser_id_first;id<=definition.laser_id_last;++id){
+            laser_can_node_status_t node={0};
+            if(laser_can_bringup_get_node(id,&node)&&node.alive)++online;
+        }
+        const int length=snprintf(json,sizeof(json),
+            "%s{\"id\":%u,\"first\":%u,\"last\":%u,\"online\":%u}",
+            group_id==1U?"":",",group_id,definition.laser_id_first,
+            definition.laser_id_last,online);
+        error=httpd_resp_send_chunk(request,json,length);
+    }
     if (error == ESP_OK) error = httpd_resp_send_chunk(request, "]}", 2U);
     if (error == ESP_OK) error = httpd_resp_send_chunk(request, NULL, 0U);
     return error;
@@ -219,7 +257,36 @@ static esp_err_t factory_lasers(httpd_req_t *request)
 
 static bool field(const char *body, const char *key, char *output, size_t capacity)
 {
-    return httpd_query_key_value(body, key, output, capacity) == ESP_OK;
+    if (httpd_query_key_value(body, key, output, capacity) != ESP_OK) return false;
+    char *read = output, *write = output;
+    while (*read != '\0') {
+        if (*read == '+') {
+            *write++ = ' ';
+        } else if (*read == '%' && read[1] != '\0' && read[2] != '\0') {
+            unsigned value = 0U;
+            bool valid = true;
+            for (unsigned i = 1U; i <= 2U; ++i) {
+                const char c = read[i];
+                unsigned nibble = 0U;
+                if (c >= '0' && c <= '9') nibble = (unsigned)(c - '0');
+                else if (c >= 'a' && c <= 'f') nibble = (unsigned)(c - 'a' + 10);
+                else if (c >= 'A' && c <= 'F') nibble = (unsigned)(c - 'A' + 10);
+                else { valid = false; break; }
+                value = (value << 4U) | nibble;
+            }
+            if (valid) {
+                *write++ = (char)value;
+                read += 2;
+            } else {
+                *write++ = *read;
+            }
+        } else {
+            *write++ = *read;
+        }
+        ++read;
+    }
+    *write = '\0';
+    return true;
 }
 
 static esp_err_t read_body(httpd_req_t *request, char *buffer, size_t capacity)
@@ -266,6 +333,7 @@ static esp_err_t set_position(httpd_req_t *request)
         return gateway_web_send_text(request, "400 Bad Request", "Thiếu trường " key); \
     position.member = (typeof(position.member))strtoul(value, NULL, 10); \
 } while (0)
+    READ_UINT("position_id", position_id);
     READ_UINT("group_id", group_id);
     READ_UINT("laser_id", laser_id);
     READ_UINT("distance_mm", distance_mm);
@@ -296,8 +364,8 @@ static esp_err_t apply_laser(httpd_req_t *request)
     if (!gateway_auth_require_api(request, GW_PERMISSION_LASER_CONFIG, NULL)) return ESP_OK;
     char body[64] = {0}, value[8] = {0};
     if (read_body(request, body, sizeof(body)) != ESP_OK ||
-        !field(body, "group_id", value, sizeof(value)))
-        return gateway_web_send_text(request, "400 Bad Request", "Thiếu Group");
+        !field(body, "position_id", value, sizeof(value)))
+        return gateway_web_send_text(request, "400 Bad Request", "Thiếu vị trí kho");
     warehouse_position_t position;
     if (!warehouse_manager_get_position((uint8_t)atoi(value), &position) ||
         !position.config.enabled)

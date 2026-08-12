@@ -179,6 +179,9 @@ esp_err_t platform_wifi_start_apsta(const platform_wifi_sta_network_config_t *st
                                     platform_wifi_event_callback_t callback,
                                     void *context);
 
+/** Update the stored SoftAP identity and apply it immediately when AP is active. */
+esp_err_t platform_wifi_apply_ap_config(const platform_wifi_ap_config_t *ap_config);
+
 /**
  * @brief  Ghi nhớ credentials STA (SSID/password) cho lần kết nối sau.
  *

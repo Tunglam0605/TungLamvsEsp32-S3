@@ -341,6 +341,30 @@ esp_err_t platform_wifi_start_apsta(const platform_wifi_sta_network_config_t *st
     return ESP_OK;
 }
 
+esp_err_t platform_wifi_apply_ap_config(const platform_wifi_ap_config_t *ap_config)
+{
+    if (!ap_config || !ap_config->ssid) return ESP_ERR_INVALID_ARG;
+    if (!s_started) return ESP_ERR_INVALID_STATE;
+    copy_string(s_ap_ssid, sizeof(s_ap_ssid), ap_config->ssid);
+    copy_string(s_ap_password, sizeof(s_ap_password), ap_config->password);
+    copy_string(s_ap_ip, sizeof(s_ap_ip), ap_config->ip);
+    copy_string(s_ap_netmask, sizeof(s_ap_netmask), ap_config->netmask);
+    s_ap_channel = ap_config->channel ? ap_config->channel : 1;
+    s_ap_max_clients = ap_config->max_clients ? ap_config->max_clients
+                                               : PLATFORM_WIFI_MAX_AP_CLIENTS;
+    if (!s_ap_started) return ESP_OK;
+    wifi_config_t wifi = {0};
+    copy_string((char *)wifi.ap.ssid, sizeof(wifi.ap.ssid), s_ap_ssid);
+    copy_string((char *)wifi.ap.password, sizeof(wifi.ap.password), s_ap_password);
+    wifi.ap.ssid_len = strlen((char *)wifi.ap.ssid);
+    wifi.ap.channel = s_ap_channel;
+    wifi.ap.authmode = strlen((char *)wifi.ap.password) >= 8
+        ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
+    wifi.ap.max_connection = s_ap_max_clients;
+    wifi.ap.pmf_cfg.required = false;
+    return esp_wifi_set_config(WIFI_IF_AP, &wifi);
+}
+
 esp_err_t platform_wifi_sta_set_credentials(const char *ssid, const char *password)
 {
     if (!ssid) return ESP_ERR_INVALID_ARG;

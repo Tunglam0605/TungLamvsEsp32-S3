@@ -21,7 +21,8 @@ typedef enum {
     GW_PERMISSION_SYSTEM_DEBUG     = 1U << 4,
     GW_PERMISSION_NETWORK_CONFIG   = 1U << 5,
     GW_PERMISSION_MQTT_CONFIG      = 1U << 6,
-    GW_PERMISSION_USER_MANAGEMENT  = 1U << 7,
+    GW_PERMISSION_ETHERNET_CONFIG  = 1U << 7,
+    GW_PERMISSION_WAREHOUSE_IDENTITY = 1U << 8,
 } gateway_permission_t;
 
 typedef struct {
@@ -31,16 +32,14 @@ typedef struct {
     int64_t expires_at_ms;
 } gateway_auth_session_t;
 
-typedef struct {
-    char username[24];
-    gateway_role_t role;
-    bool enabled;
-} gateway_auth_account_info_t;
-
 esp_err_t gateway_auth_init(void);
+bool gateway_auth_is_ready(void);
 bool gateway_auth_role_has_permission(gateway_role_t role, gateway_permission_t permission);
 const char *gateway_auth_role_name(gateway_role_t role);
-bool gateway_auth_login_allowed(int64_t now_ms, uint32_t *retry_after_seconds);
+bool gateway_auth_login_allowed(uint32_t source_ipv4, int64_t now_ms,
+                                uint32_t *retry_after_seconds);
+void gateway_auth_login_failed(uint32_t source_ipv4, int64_t now_ms);
+void gateway_auth_login_succeeded(uint32_t source_ipv4);
 bool gateway_auth_authenticate(const char *username, const char *password,
                                gateway_auth_session_t *session, char *token,
                                size_t token_capacity);
@@ -51,10 +50,4 @@ bool gateway_auth_require_api(httpd_req_t *request, gateway_permission_t permiss
                               gateway_auth_session_t *session);
 bool gateway_auth_require_page(httpd_req_t *request, gateway_permission_t permission,
                                gateway_auth_session_t *session);
-size_t gateway_auth_accounts(gateway_auth_account_info_t *accounts, size_t capacity);
-esp_err_t gateway_auth_set_enabled(const char *username, bool enabled);
-esp_err_t gateway_auth_reset_password(const char *username);
-esp_err_t gateway_auth_set_password(const char *username, const char *new_password);
-esp_err_t gateway_auth_change_password(const char *username, const char *current_password,
-                                       const char *new_password);
 esp_err_t gateway_auth_restore_defaults(void);

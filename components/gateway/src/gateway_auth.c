@@ -18,6 +18,10 @@
 #define HASH_BYTES 32U
 #define PBKDF2_ITERATIONS 12000U
 #define SESSION_LIFETIME_MS (30LL * 60LL * 1000LL)
+#define LOGIN_SOURCE_COUNT 6U
+#define LOGIN_FAILURE_LIMIT 5U
+#define LOGIN_WINDOW_MS 60000LL
+#define LOGIN_BLOCK_MS 60000LL
 
 typedef struct {
     char username[24];
@@ -36,9 +40,16 @@ typedef struct {
 static account_t s_accounts[ACCOUNT_COUNT];
 static session_t s_sessions[SESSION_COUNT];
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
-static uint8_t s_failed_attempts;
-static int64_t s_failure_window_ms;
-static int64_t s_blocked_until_ms;
+static bool s_ready;
+typedef struct {
+    bool used;
+    uint32_t source_ipv4;
+    uint8_t failures;
+    int64_t window_started_ms;
+    int64_t blocked_until_ms;
+    int64_t last_seen_ms;
+} login_source_t;
+static login_source_t s_login_sources[LOGIN_SOURCE_COUNT];
 
 static const char *const DEFAULT_USERS[ACCOUNT_COUNT] = {
     "admin_factory", "admin_tech", "admin_it", "admin_aubot"
@@ -102,16 +113,6 @@ static account_t *account_find(const char *username)
     return NULL;
 }
 
-static void invalidate_user_sessions(const char *username)
-{
-    taskENTER_CRITICAL(&s_mux);
-    for (size_t i = 0; i < SESSION_COUNT; ++i) {
-        if (s_sessions[i].active && strcmp(s_sessions[i].public.username, username) == 0)
-            s_sessions[i].active = false;
-    }
-    taskEXIT_CRITICAL(&s_mux);
-}
-
 static esp_err_t save_account(size_t index)
 {
     platform_nvs_handle_t handle = {0};
@@ -151,12 +152,14 @@ esp_err_t gateway_auth_restore_defaults(void)
     }
     taskENTER_CRITICAL(&s_mux);
     memset(s_sessions, 0, sizeof(s_sessions));
+    s_ready = true;
     taskEXIT_CRITICAL(&s_mux);
     return ESP_OK;
 }
 
 esp_err_t gateway_auth_init(void)
 {
+    s_ready = false;
     platform_nvs_handle_t handle = {0};
     esp_err_t error = platform_nvs_open(&handle, AUTH_NS, true);
     if (error == ESP_ERR_NOT_FOUND) return gateway_auth_restore_defaults();
@@ -186,22 +189,29 @@ esp_err_t gateway_auth_init(void)
         }
         strlcpy(s_accounts[i].username, username, sizeof(s_accounts[i].username));
         s_accounts[i].role = (gateway_role_t)atoi(role);
-        s_accounts[i].enabled = atoi(enabled) != 0;
+        /* System accounts are fixed and cannot be disabled from WebUI. */
+        s_accounts[i].enabled = true;
     }
     platform_nvs_close(&handle);
+    if (error == ESP_OK) s_ready = true;
     return error;
 }
+
+bool gateway_auth_is_ready(void) { return s_ready; }
 
 bool gateway_auth_role_has_permission(gateway_role_t role, gateway_permission_t permission)
 {
     uint32_t permissions = GW_PERMISSION_VIEW_PUBLIC;
     if (role == GW_ROLE_FACTORY)
-        permissions |= GW_PERMISSION_WAREHOUSE_CONFIG | GW_PERMISSION_LASER_CONFIG;
+        permissions |= GW_PERMISSION_WAREHOUSE_CONFIG | GW_PERMISSION_LASER_CONFIG |
+                       GW_PERMISSION_NETWORK_CONFIG | GW_PERMISSION_WAREHOUSE_IDENTITY;
     else if (role == GW_ROLE_TECH)
         permissions |= GW_PERMISSION_WAREHOUSE_CONFIG | GW_PERMISSION_LASER_CONFIG |
-                       GW_PERMISSION_CAN_DEBUG | GW_PERMISSION_SYSTEM_DEBUG;
+                       GW_PERMISSION_CAN_DEBUG | GW_PERMISSION_SYSTEM_DEBUG |
+                       GW_PERMISSION_NETWORK_CONFIG;
     else if (role == GW_ROLE_IT)
-        permissions |= GW_PERMISSION_NETWORK_CONFIG | GW_PERMISSION_MQTT_CONFIG;
+        permissions |= GW_PERMISSION_NETWORK_CONFIG | GW_PERMISSION_MQTT_CONFIG |
+                       GW_PERMISSION_ETHERNET_CONFIG;
     else if (role == GW_ROLE_SUPER_ADMIN)
         permissions = 0xffffffffU;
     return role != GW_ROLE_NONE && (permissions & permission) == (uint32_t)permission;
@@ -218,24 +228,60 @@ const char *gateway_auth_role_name(gateway_role_t role)
     }
 }
 
-bool gateway_auth_login_allowed(int64_t now_ms, uint32_t *retry_after_seconds)
+static login_source_t *login_source(uint32_t source_ipv4, int64_t now_ms, bool create)
 {
-    if (now_ms >= s_blocked_until_ms) return true;
-    if (retry_after_seconds)
-        *retry_after_seconds = (uint32_t)((s_blocked_until_ms - now_ms + 999LL) / 1000LL);
-    return false;
+    login_source_t *free_slot = NULL, *oldest = &s_login_sources[0];
+    for (size_t i = 0; i < LOGIN_SOURCE_COUNT; ++i) {
+        login_source_t *slot = &s_login_sources[i];
+        if (slot->used && slot->source_ipv4 == source_ipv4) return slot;
+        if (!slot->used && free_slot == NULL) free_slot = slot;
+        if (slot->last_seen_ms < oldest->last_seen_ms) oldest = slot;
+    }
+    if (!create) return NULL;
+    login_source_t *slot = free_slot != NULL ? free_slot : oldest;
+    *slot = (login_source_t){.used=true,.source_ipv4=source_ipv4,
+                             .window_started_ms=now_ms,.last_seen_ms=now_ms};
+    return slot;
 }
 
-static void record_failure(int64_t now_ms)
+bool gateway_auth_login_allowed(uint32_t source_ipv4, int64_t now_ms,
+                                uint32_t *retry_after_seconds)
 {
-    if (now_ms - s_failure_window_ms > 60000LL) {
-        s_failure_window_ms = now_ms;
-        s_failed_attempts = 0U;
+    bool allowed = true;
+    taskENTER_CRITICAL(&s_mux);
+    login_source_t *slot = login_source(source_ipv4, now_ms, false);
+    if (slot != NULL) {
+        slot->last_seen_ms = now_ms;
+        allowed = now_ms >= slot->blocked_until_ms;
+        if (!allowed && retry_after_seconds != NULL)
+            *retry_after_seconds = (uint32_t)((slot->blocked_until_ms-now_ms+999LL)/1000LL);
     }
-    if (++s_failed_attempts >= 5U) {
-        s_blocked_until_ms = now_ms + 60000LL;
-        s_failed_attempts = 0U;
+    taskEXIT_CRITICAL(&s_mux);
+    return allowed;
+}
+
+void gateway_auth_login_failed(uint32_t source_ipv4, int64_t now_ms)
+{
+    taskENTER_CRITICAL(&s_mux);
+    login_source_t *slot = login_source(source_ipv4, now_ms, true);
+    if (now_ms - slot->window_started_ms > LOGIN_WINDOW_MS) {
+        slot->window_started_ms = now_ms;
+        slot->failures = 0U;
     }
+    slot->last_seen_ms = now_ms;
+    if (++slot->failures >= LOGIN_FAILURE_LIMIT) {
+        slot->blocked_until_ms = now_ms + LOGIN_BLOCK_MS;
+        slot->failures = 0U;
+    }
+    taskEXIT_CRITICAL(&s_mux);
+}
+
+void gateway_auth_login_succeeded(uint32_t source_ipv4)
+{
+    taskENTER_CRITICAL(&s_mux);
+    login_source_t *slot = login_source(source_ipv4, 0, false);
+    if (slot != NULL) memset(slot, 0, sizeof(*slot));
+    taskEXIT_CRITICAL(&s_mux);
 }
 
 bool gateway_auth_authenticate(const char *username, const char *password,
@@ -244,13 +290,12 @@ bool gateway_auth_authenticate(const char *username, const char *password,
 {
     const int64_t now = esp_timer_get_time() / 1000LL;
     if (!username || !password || !session || !token || token_capacity < 65U ||
-        !gateway_auth_login_allowed(now, NULL)) return false;
+        !s_ready) return false;
     account_t *account = account_find(username);
     uint8_t candidate[HASH_BYTES] = {0};
     const bool derived = account && derive(password, account->salt, candidate);
     if (!account || !account->enabled || !derived ||
         !constant_equal(candidate, account->hash, HASH_BYTES)) {
-        record_failure(now);
         return false;
     }
     uint8_t random[32];
@@ -279,7 +324,6 @@ bool gateway_auth_authenticate(const char *username, const char *password,
     strlcpy(s_sessions[slot].token, token, sizeof(s_sessions[slot].token));
     s_sessions[slot].public = created;
     taskEXIT_CRITICAL(&s_mux);
-    s_failed_attempts = 0U;
     *session = created;
     return true;
 }
@@ -310,6 +354,7 @@ static bool request_token(httpd_req_t *request, char output[65])
 bool gateway_auth_session_from_request(httpd_req_t *request,
                                        gateway_auth_session_t *session)
 {
+    if (!s_ready) return false;
     char token[65];
     if (!request_token(request, token)) return false;
     const int64_t now = esp_timer_get_time() / 1000LL;
@@ -342,6 +387,11 @@ void gateway_auth_logout_request(httpd_req_t *request)
 bool gateway_auth_require_api(httpd_req_t *request, gateway_permission_t permission,
                               gateway_auth_session_t *session)
 {
+    if (!s_ready) {
+        (void)gateway_web_send_text(request, "503 Service Unavailable",
+                                    "Dịch vụ đăng nhập chưa sẵn sàng");
+        return false;
+    }
     gateway_auth_session_t current;
     if (!gateway_auth_session_from_request(request, &current)) {
         (void)gateway_web_send_text(request, "401 Unauthorized", "Cần đăng nhập");
@@ -358,6 +408,11 @@ bool gateway_auth_require_api(httpd_req_t *request, gateway_permission_t permiss
 bool gateway_auth_require_page(httpd_req_t *request, gateway_permission_t permission,
                                gateway_auth_session_t *session)
 {
+    if (!s_ready) {
+        (void)gateway_web_send_text(request, "503 Service Unavailable",
+                                    "Dịch vụ đăng nhập chưa sẵn sàng");
+        return false;
+    }
     gateway_auth_session_t current;
     if (!gateway_auth_session_from_request(request, &current)) {
         httpd_resp_set_status(request, "303 See Other");
@@ -371,67 +426,4 @@ bool gateway_auth_require_page(httpd_req_t *request, gateway_permission_t permis
     }
     if (session) *session = current;
     return true;
-}
-
-size_t gateway_auth_accounts(gateway_auth_account_info_t *accounts, size_t capacity)
-{
-    const size_t count = capacity < ACCOUNT_COUNT ? capacity : ACCOUNT_COUNT;
-    for (size_t i = 0; i < count; ++i) {
-        strlcpy(accounts[i].username, s_accounts[i].username, sizeof(accounts[i].username));
-        accounts[i].role = s_accounts[i].role;
-        accounts[i].enabled = s_accounts[i].enabled;
-    }
-    return count;
-}
-
-esp_err_t gateway_auth_set_enabled(const char *username, bool enabled)
-{
-    account_t *account = account_find(username);
-    if (!account) return ESP_ERR_NOT_FOUND;
-    if (account->role == GW_ROLE_SUPER_ADMIN && !enabled) return ESP_ERR_NOT_ALLOWED;
-    const bool previous = account->enabled;
-    account->enabled = enabled;
-    const esp_err_t error = save_account((size_t)(account - s_accounts));
-    if (error != ESP_OK) account->enabled = previous;
-    if (error == ESP_OK && !enabled) invalidate_user_sessions(username);
-    return error;
-}
-
-static esp_err_t update_password(account_t *account, const char *password)
-{
-    if (!account || !password || strlen(password) < 8U || strlen(password) > 64U)
-        return ESP_ERR_INVALID_ARG;
-    const account_t previous = *account;
-    esp_fill_random(account->salt, sizeof(account->salt));
-    if (!derive(password, account->salt, account->hash)) {
-        *account = previous;
-        return ESP_FAIL;
-    }
-    const esp_err_t error = save_account((size_t)(account - s_accounts));
-    if (error != ESP_OK) *account = previous;
-    if (error == ESP_OK) invalidate_user_sessions(account->username);
-    return error;
-}
-
-esp_err_t gateway_auth_set_password(const char *username, const char *new_password)
-{
-    return update_password(account_find(username), new_password);
-}
-
-esp_err_t gateway_auth_reset_password(const char *username)
-{
-    account_t *account = account_find(username);
-    if (!account) return ESP_ERR_NOT_FOUND;
-    const size_t index = (size_t)(account - s_accounts);
-    return update_password(account, DEFAULT_PASSWORDS[index]);
-}
-
-esp_err_t gateway_auth_change_password(const char *username, const char *current_password,
-                                       const char *new_password)
-{
-    account_t *account = account_find(username);
-    uint8_t candidate[HASH_BYTES];
-    if (!account || !derive(current_password, account->salt, candidate) ||
-        !constant_equal(candidate, account->hash, HASH_BYTES)) return ESP_ERR_INVALID_STATE;
-    return update_password(account, new_password);
 }

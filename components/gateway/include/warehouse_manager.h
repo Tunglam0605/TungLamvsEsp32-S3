@@ -21,6 +21,8 @@ typedef enum {
     WAREHOUSE_VALID = 0,
     WAREHOUSE_INVALID_GROUP,
     WAREHOUSE_INVALID_LASER_ID,
+    WAREHOUSE_DUPLICATE_GROUP,
+    WAREHOUSE_GROUP_OFFLINE,
     WAREHOUSE_DUPLICATE_LASER_ID,
     WAREHOUSE_DUPLICATE_CODE,
     WAREHOUSE_INVALID_DISTANCE,
@@ -30,6 +32,8 @@ typedef enum {
 
 typedef struct {
     bool enabled;
+    uint8_t position_id;
+    /* Physical B300 group assigned to this business warehouse position. */
     uint8_t group_id;
     uint8_t laser_id;
     char warehouse_code[WAREHOUSE_CODE_LEN];
@@ -75,7 +79,7 @@ warehouse_validation_t warehouse_manager_validate_candidate(
     laser_profile_t profile, const warehouse_position_config_t *positions,
     size_t position_count, const warehouse_position_config_t *candidate);
 esp_err_t warehouse_manager_set_position(const warehouse_position_config_t *position);
-bool warehouse_manager_get_position(uint8_t group_id, warehouse_position_t *position);
+bool warehouse_manager_get_position(uint8_t position_id, warehouse_position_t *position);
 void warehouse_manager_snapshot(warehouse_snapshot_t *snapshot);
 warehouse_state_t warehouse_state_from_sensor(bool online, bool status_valid,
                                                laser_obstacle_state_t warn);

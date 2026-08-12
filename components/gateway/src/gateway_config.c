@@ -2,7 +2,9 @@
 
 #include <stdio.h>
 #include <string.h>
+#include "esp_mac.h"
 #include "freertos/FreeRTOS.h"
+#include "gateway_topic.h"
 #include "platform_nvs.h"
 
 #define NS "gw_config"
@@ -10,11 +12,32 @@
 static gateway_config_t s_config;
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
 
+void gateway_config_build_ap_identity(const char *gateway_id,
+                                      char *ssid, size_t ssid_capacity,
+                                      char *password, size_t password_capacity)
+{
+    const char *id = gateway_id && gateway_id[0] ? gateway_id : "GW-01";
+    if (password && password_capacity)
+        snprintf(password, password_capacity, "AUBOT-%s", id);
+    if (!ssid || !ssid_capacity) return;
+    uint8_t mac[6] = {0};
+    if (esp_efuse_mac_get_default(mac) == ESP_OK)
+        snprintf(ssid, ssid_capacity, "AUBOT-%s-%02X%02X%02X",
+                 id, mac[3], mac[4], mac[5]);
+    else
+        snprintf(ssid, ssid_capacity, "AUBOT-%s", id);
+}
+
 static void defaults(gateway_config_t *c)
 {
     memset(c, 0, sizeof(*c));
     snprintf(c->gateway_id, sizeof(c->gateway_id), "GW-01");
-    snprintf(c->ap_password, sizeof(c->ap_password), "gateway123");
+    snprintf(c->company_id, sizeof(c->company_id), "aubot");
+    snprintf(c->site_id, sizeof(c->site_id), "ha-noi");
+    snprintf(c->warehouse_id, sizeof(c->warehouse_id), "kho-01");
+    snprintf(c->warehouse_name, sizeof(c->warehouse_name), "Kho 01");
+    gateway_config_build_ap_identity(c->gateway_id, NULL, 0,
+                                     c->ap_password, sizeof(c->ap_password));
     c->wifi_dhcp = true;
     snprintf(c->wifi_ip, sizeof(c->wifi_ip), "192.168.1.204");
     snprintf(c->wifi_netmask, sizeof(c->wifi_netmask), "255.255.255.0");
@@ -49,7 +72,10 @@ esp_err_t gateway_config_init(void)
     if (err == ESP_ERR_NOT_FOUND) return ESP_OK;
     if (err != ESP_OK) return err;
     get_str(&h, "gw_id", s_config.gateway_id, sizeof(s_config.gateway_id));
-    get_str(&h, "ap_pass", s_config.ap_password, sizeof(s_config.ap_password));
+    get_str(&h, "company_id", s_config.company_id, sizeof(s_config.company_id));
+    get_str(&h, "site_id", s_config.site_id, sizeof(s_config.site_id));
+    get_str(&h, "warehouse_id", s_config.warehouse_id, sizeof(s_config.warehouse_id));
+    get_str(&h, "warehouse_name", s_config.warehouse_name, sizeof(s_config.warehouse_name));
     get_str(&h, "wifi_ip", s_config.wifi_ip, sizeof(s_config.wifi_ip));
     get_str(&h, "wifi_mask", s_config.wifi_netmask, sizeof(s_config.wifi_netmask));
     get_str(&h, "wifi_gw", s_config.wifi_gateway, sizeof(s_config.wifi_gateway));
@@ -83,6 +109,8 @@ esp_err_t gateway_config_init(void)
         }
     }
     platform_nvs_close(&h);
+    gateway_config_build_ap_identity(s_config.gateway_id, NULL, 0,
+                                     s_config.ap_password, sizeof(s_config.ap_password));
     return ESP_OK;
 }
 
@@ -95,15 +123,24 @@ void gateway_config_get(gateway_config_t *config)
 esp_err_t gateway_config_save(const gateway_config_t *c)
 {
     if (!c || c->gateway_id[0] == 0 || c->wifi_profile_count > GATEWAY_WIFI_PROFILE_MAX ||
+        !gateway_identity_valid(c) ||
         c->mqtt_port == 0 || c->publish_interval_ms < 250 || c->publish_interval_ms > 60000 ||
         c->sntp_primary[0] == 0 || c->timezone[0] == 0) return ESP_ERR_INVALID_ARG;
+    gateway_config_t normalized = *c;
+    gateway_config_build_ap_identity(normalized.gateway_id, NULL, 0,
+                                     normalized.ap_password, sizeof(normalized.ap_password));
+    c = &normalized;
     platform_nvs_handle_t h = {0};
     esp_err_t e = platform_nvs_open(&h, NS, false);
 #define SETS(k,v) do { if (e == ESP_OK) e = platform_nvs_set_string(&h,(k),(v)); } while (0)
 #define SET8(k,v) do { if (e == ESP_OK) e = platform_nvs_set_u8(&h,(k),(v)); } while (0)
 #define SET16(k,v) do { if (e == ESP_OK) e = platform_nvs_set_u16(&h,(k),(v)); } while (0)
     if (e != ESP_OK) return e;
-    SETS("gw_id", c->gateway_id); SETS("ap_pass", c->ap_password);
+    SETS("gw_id", c->gateway_id);
+    SETS("company_id", c->company_id);
+    SETS("site_id", c->site_id);
+    SETS("warehouse_id", c->warehouse_id);
+    SETS("warehouse_name", c->warehouse_name);
     SET8("wifi_dhcp", c->wifi_dhcp); SETS("wifi_ip", c->wifi_ip); SETS("wifi_mask", c->wifi_netmask);
     SETS("wifi_gw", c->wifi_gateway); SETS("wifi_dns", c->wifi_dns);
     SET8("eth_mode", c->eth_router_mode); SET8("eth_dhcp", c->eth_dhcp); SETS("eth_ip", c->eth_ip); SETS("eth_mask", c->eth_netmask);
@@ -127,15 +164,26 @@ esp_err_t gateway_config_save(const gateway_config_t *c)
 bool gateway_config_add_wifi(gateway_config_t *c, const char *ssid, const char *password)
 {
     if (!c || !ssid || !ssid[0] || strnlen(ssid, 33) >= 33 || !password || strnlen(password, 64) >= 64) return false;
-    for (uint8_t i = 0; i < c->wifi_profile_count; ++i) if (!strcmp(c->wifi_profiles[i].ssid, ssid)) {
-        snprintf(c->wifi_profiles[i].password, sizeof(c->wifi_profiles[i].password), "%s", password); return true;
+    gateway_wifi_profile_t selected = {0};
+    snprintf(selected.ssid, sizeof(selected.ssid), "%s", ssid);
+    snprintf(selected.password, sizeof(selected.password), "%s", password);
+    uint8_t count = c->wifi_profile_count;
+    if (count > GATEWAY_WIFI_PROFILE_MAX) count = GATEWAY_WIFI_PROFILE_MAX;
+    uint8_t index = count;
+    for (uint8_t i = 0; i < count; ++i) {
+        if (!strcmp(c->wifi_profiles[i].ssid, ssid)) {
+            index = i;
+            break;
+        }
     }
-    if (c->wifi_profile_count == GATEWAY_WIFI_PROFILE_MAX) {
-        memmove(&c->wifi_profiles[0], &c->wifi_profiles[1], sizeof(c->wifi_profiles[0]) * (GATEWAY_WIFI_PROFILE_MAX - 1));
-        c->wifi_profile_count--;
+    if (index == count) {
+        if (count < GATEWAY_WIFI_PROFILE_MAX) ++count;
+        index = count - 1U;
     }
-    gateway_wifi_profile_t *p = &c->wifi_profiles[c->wifi_profile_count++];
-    snprintf(p->ssid, sizeof(p->ssid), "%s", ssid); snprintf(p->password, sizeof(p->password), "%s", password); return true;
+    for (uint8_t i = index; i > 0U; --i) c->wifi_profiles[i] = c->wifi_profiles[i - 1U];
+    c->wifi_profiles[0] = selected;
+    c->wifi_profile_count = count;
+    return true;
 }
 
 bool gateway_config_remove_wifi(gateway_config_t *c, const char *ssid)

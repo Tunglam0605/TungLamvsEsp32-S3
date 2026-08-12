@@ -17,7 +17,7 @@
 #include "gateway_web_theme.h"
 #include "gateway_auth.h"
 #include "gateway_auth_http.h"
-#include "gateway_admin_http.h"
+#include "gateway_output.h"
 
 static const char *TAG = "DEBUG_HTTP";
 static httpd_handle_t s_server;
@@ -236,6 +236,113 @@ static esp_err_t status_handler(httpd_req_t *req)
     return err;
 }
 
+static esp_err_t tech_summary_handler(httpd_req_t *req)
+{
+    if (!gateway_auth_require_api(req, GW_PERMISSION_CAN_DEBUG, NULL)) return ESP_OK;
+    bsp_can_status_t can = {0};
+    laser_can_bringup_status_t laser = {0};
+    gateway_output_snapshot_t output = {0};
+    bsp_can_get_status(&can);
+    laser_can_bringup_get_status(&laser);
+    gateway_output_snapshot(&output);
+    char json[520];
+    const int length = snprintf(json, sizeof(json),
+        "{\"uptime_ms\":%" PRId64 ",\"can_state\":\"%s\",\"laser_online\":%u,"
+        "\"rx_frames\":%" PRIu32 ",\"tx_fail\":%" PRIu32 ","
+        "\"rx_rejected\":%" PRIu32 ",\"rx_dropped\":%" PRIu32 ","
+        "\"bus_errors\":%" PRIu32 ",\"network\":%s,\"mqtt\":%s,"
+        "\"output\":{\"buzzer\":%s,\"red\":%s,\"yellow\":%s,\"green\":%s}}",
+        esp_timer_get_time() / 1000LL, can_state_name(can.state), laser.node_count,
+        laser.rx_frame_count, can.tx_failed_count, can.rx_rejected_count,
+        can.rx_queue_overflow_count, can.bus_error_count,
+        output.production_network ? "true" : "false",
+        output.mqtt_connected ? "true" : "false",
+        output.buzzer ? "true" : "false", output.tower_red ? "true" : "false",
+        output.tower_yellow ? "true" : "false", output.tower_green ? "true" : "false");
+    httpd_resp_set_type(req, "application/json; charset=utf-8");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    return httpd_resp_send(req, json, length);
+}
+
+static esp_err_t tech_lasers_handler(httpd_req_t *req)
+{
+    if (!gateway_auth_require_api(req, GW_PERMISSION_CAN_DEBUG, NULL)) return ESP_OK;
+    httpd_resp_set_type(req, "application/json; charset=utf-8");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    esp_err_t error = httpd_resp_send_chunk(req, "{\"lasers\":[", 11U);
+    char json[72];
+    bool first = true;
+    for (uint8_t id = 1; error == ESP_OK && id <= LASER_CAN_MAX_NODES; ++id) {
+        laser_can_node_status_t node = {0};
+        if (!laser_can_bringup_get_node(id, &node)) continue;
+        const int length = snprintf(json, sizeof(json),
+            "%s{\"id\":%u,\"online\":%s,\"warn\":\"%s\"}", first ? "" : ",",
+            id, node.alive ? "true" : "false",
+            laser_can_obstacle_state_name(node.obstacle_state));
+        error = httpd_resp_send_chunk(req, json, length);
+        first = false;
+    }
+    if (error == ESP_OK) error = httpd_resp_send_chunk(req, "]}", 2U);
+    if (error == ESP_OK) error = httpd_resp_send_chunk(req, NULL, 0U);
+    return error;
+}
+
+static esp_err_t tech_laser_handler(httpd_req_t *req)
+{
+    if (!gateway_auth_require_api(req, GW_PERMISSION_CAN_DEBUG, NULL)) return ESP_OK;
+    char query[32] = {0}, value[8] = {0};
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK ||
+        httpd_query_key_value(query, "id", value, sizeof(value)) != ESP_OK)
+        return gateway_web_send_text(req, "400 Bad Request", "Thiếu LaserID");
+    const unsigned id = strtoul(value, NULL, 10);
+    laser_can_node_status_t node = {0};
+    if (id < 1U || id > LASER_CAN_MAX_NODES ||
+        !laser_can_bringup_get_node((uint8_t)id, &node))
+        return gateway_web_send_text(req, "404 Not Found", "Chưa phát hiện LaserID");
+    const int64_t now = esp_timer_get_time() / 1000LL;
+    char json[480];
+    const int length = snprintf(json, sizeof(json),
+        "{\"id\":%u,\"group\":%u,\"online\":%s,\"last_seen_ms\":%" PRId64 ","
+        "\"status_valid\":%s,\"warn\":\"%s\",\"distance_mm\":%u,"
+        "\"emergency_mm\":%u,\"row\":%u,\"column\":%u,\"proximity\":%s,"
+        "\"config_state\":\"%s\"}", node.laser_id, (unsigned)(node.group + 1U),
+        node.alive ? "true" : "false", now >= node.last_seen_ms ? now - node.last_seen_ms : 0,
+        node.status_valid ? "true" : "false",
+        laser_can_obstacle_state_name(node.obstacle_state), node.distance_mm,
+        node.distance_emergency_mm, node.high_row, node.low_col,
+        node.proximity_enabled ? "true" : "false",
+        laser_can_config_state_name(node.config_state));
+    httpd_resp_set_type(req, "application/json; charset=utf-8");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    return httpd_resp_send(req, json, length);
+}
+
+static esp_err_t tech_can_handler(httpd_req_t *req)
+{
+    if (!gateway_auth_require_api(req, GW_PERMISSION_CAN_DEBUG, NULL)) return ESP_OK;
+    bsp_can_status_t can = {0};
+    laser_can_bringup_status_t laser = {0};
+    bsp_can_get_status(&can);
+    laser_can_bringup_get_status(&laser);
+    char json[640];
+    const int length = snprintf(json, sizeof(json),
+        "{\"state\":\"%s\",\"tx_ok\":%" PRIu32 ",\"tx_fail\":%" PRIu32 ","
+        "\"tx_error\":%u,\"rx_error\":%u,\"rx_rejected\":%" PRIu32 ","
+        "\"rx_dropped\":%" PRIu32 ",\"error_events\":%" PRIu32 ","
+        "\"arbitration_lost\":%" PRIu32 ",\"bit_errors\":%" PRIu32 ","
+        "\"form_errors\":%" PRIu32 ",\"stuff_errors\":%" PRIu32 ","
+        "\"ack_errors\":%" PRIu32 ",\"last_id\":%u,\"last_dlc\":%u,\"remote\":%s}",
+        can_state_name(can.state), can.tx_success_count, can.tx_failed_count,
+        can.tx_error_count, can.rx_error_count, can.rx_rejected_count,
+        can.rx_queue_overflow_count, can.error_callback_count,
+        can.arbitration_lost_count, can.bit_error_count, can.form_error_count,
+        can.stuff_error_count, can.ack_error_count, laser.last_rx_id,
+        laser.last_rx_dlc, laser.last_rx_remote ? "true" : "false");
+    httpd_resp_set_type(req, "application/json; charset=utf-8");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    return httpd_resp_send(req, json, length);
+}
+
 static bool parse_u32_field(const char *body, const char *key, uint32_t max,
                             uint32_t *value)
 {
@@ -332,26 +439,29 @@ esp_err_t debug_http_server_start(void)
         .uri = "/api/debug/status", .method = HTTP_GET, .handler = status_handler
     };
     const httpd_uri_t tech_status = {
-        .uri = "/api/tech/status", .method = HTTP_GET, .handler = status_handler
+        .uri = "/api/tech/summary", .method = HTTP_GET, .handler = tech_summary_handler
     };
     const httpd_uri_t tech_can = {
-        .uri = "/api/tech/can", .method = HTTP_GET, .handler = status_handler
+        .uri = "/api/tech/can", .method = HTTP_GET, .handler = tech_can_handler
     };
     const httpd_uri_t tech_laser = {
-        .uri = "/api/tech/laser", .method = HTTP_GET, .handler = status_handler
+        .uri = "/api/tech/lasers", .method = HTTP_GET, .handler = tech_lasers_handler
+    };
+    const httpd_uri_t tech_laser_detail = {
+        .uri = "/api/tech/laser", .method = HTTP_GET, .handler = tech_laser_handler
     };
     const httpd_uri_t configure = {
         .uri = "/api/laser/config", .method = HTTP_POST, .handler = config_handler
     };
     if ((err = gateway_web_theme_register(s_server)) != ESP_OK ||
         (err = gateway_auth_http_register(s_server)) != ESP_OK ||
-        (err = gateway_admin_http_register(s_server)) != ESP_OK ||
         (err = httpd_register_uri_handler(s_server, &debug)) != ESP_OK ||
         (err = httpd_register_uri_handler(s_server, &tech)) != ESP_OK ||
         (err = httpd_register_uri_handler(s_server, &status)) != ESP_OK ||
         (err = httpd_register_uri_handler(s_server, &tech_status)) != ESP_OK ||
         (err = httpd_register_uri_handler(s_server, &tech_can)) != ESP_OK ||
         (err = httpd_register_uri_handler(s_server, &tech_laser)) != ESP_OK ||
+        (err = httpd_register_uri_handler(s_server, &tech_laser_detail)) != ESP_OK ||
         (err = httpd_register_uri_handler(s_server, &configure)) != ESP_OK ||
         (err = warehouse_http_register(s_server)) != ESP_OK ||
         (err = gateway_config_http_register(s_server)) != ESP_OK) {

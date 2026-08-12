@@ -74,10 +74,12 @@ esp_err_t gateway_network_start(const gateway_config_t *config)
 {
     if (!config) return ESP_ERR_INVALID_ARG;
     s_config = *config;
-    char ap_ssid[33]; snprintf(ap_ssid, sizeof(ap_ssid), "AUBOT-%s", config->gateway_id);
+    char ap_ssid[33], ap_password[64];
+    gateway_config_build_ap_identity(config->gateway_id, ap_ssid, sizeof(ap_ssid),
+                                     ap_password, sizeof(ap_password));
     platform_wifi_sta_network_config_t sta = {.dhcp=config->wifi_dhcp,.ip=config->wifi_ip,
         .netmask=config->wifi_netmask,.gateway=config->wifi_gateway,.dns=config->wifi_dns};
-    platform_wifi_ap_config_t ap = {.ssid=ap_ssid,.password=config->ap_password,
+    platform_wifi_ap_config_t ap = {.ssid=ap_ssid,.password=ap_password,
         .ip="192.168.65.204",.netmask="255.255.255.0",.channel=1,.max_clients=4};
     esp_err_t e = platform_wifi_start_apsta(&sta, &ap, NULL, NULL);
     if (e != ESP_OK) return e;
@@ -92,6 +94,12 @@ esp_err_t gateway_network_apply(const gateway_config_t *config)
 {
     if (!config || !s_started) return ESP_ERR_INVALID_STATE;
     s_config = *config; s_active[0] = 0;
+    char ap_ssid[33], ap_password[64];
+    gateway_config_build_ap_identity(config->gateway_id, ap_ssid, sizeof(ap_ssid),
+                                     ap_password, sizeof(ap_password));
+    const platform_wifi_ap_config_t ap = {.ssid=ap_ssid,.password=ap_password,
+        .ip="192.168.65.204",.netmask="255.255.255.0",.channel=1,.max_clients=4};
+    (void)platform_wifi_apply_ap_config(&ap);
     (void)platform_wifi_sta_disconnect();
     connect_best();
     const bsp_eth_network_config_t eth = config->eth_router_mode

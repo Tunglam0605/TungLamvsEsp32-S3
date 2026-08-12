@@ -24,10 +24,10 @@
 #define LASER_CAN_CONFIG_REQUEST_LAST   183U
 #define LASER_CAN_EMERGENCY_ID_FIRST    100U
 #define LASER_CAN_NORMAL_ID_FIRST       110U
-#define LASER_CAN_HEARTBEAT_PERIOD_MS   2000U
+#define LASER_CAN_HEARTBEAT_PERIOD_MS   500U
 #define LASER_CAN_B300_GROUP_COUNT      LASER_PROFILE_MAX_GROUPS
 #define LASER_CAN_HEALTH_PERIOD_MS      10000U
-#define LASER_CAN_NODE_TIMEOUT_MS       5000U
+#define LASER_CAN_NODE_TIMEOUT_MS       2000U
 #define LASER_CAN_OBSTACLE_TIMEOUT_MS   2000U
 #define LASER_CAN_DISTANCE_MAX_MM       1200U
 
@@ -342,14 +342,19 @@ static void log_can_health(void)
 static void laser_can_bringup_task(void *context)
 {
     (void)context;
-    int64_t next_heartbeat_us = 0;
+    const int64_t heartbeat_period_us =
+        (int64_t)LASER_CAN_HEARTBEAT_PERIOD_MS * 1000LL;
+    int64_t next_heartbeat_us = esp_timer_get_time();
     int64_t next_health_us = 0;
 
     for (;;) {
         const int64_t now_us = esp_timer_get_time();
         if (now_us >= next_heartbeat_us) {
             send_discovery_heartbeat();
-            next_heartbeat_us = now_us + (int64_t)LASER_CAN_HEARTBEAT_PERIOD_MS * 1000LL;
+            next_heartbeat_us += heartbeat_period_us;
+            if (now_us >= next_heartbeat_us) {
+                next_heartbeat_us = now_us + heartbeat_period_us;
+            }
         }
         if (now_us >= next_health_us) {
             log_can_health();

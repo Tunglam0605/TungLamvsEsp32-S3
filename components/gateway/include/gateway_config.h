@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include "esp_err.h"
 
@@ -18,6 +19,10 @@ typedef enum {
 
 typedef struct {
     char gateway_id[17];
+    char company_id[32];
+    char site_id[32];
+    char warehouse_id[32];
+    char warehouse_name[64];
     char ap_password[64];
     gateway_wifi_profile_t wifi_profiles[GATEWAY_WIFI_PROFILE_MAX];
     uint8_t wifi_profile_count;
@@ -46,6 +51,9 @@ typedef struct {
 esp_err_t gateway_config_init(void);
 void gateway_config_get(gateway_config_t *config);
 esp_err_t gateway_config_save(const gateway_config_t *config);
+void gateway_config_build_ap_identity(const char *gateway_id,
+                                      char *ssid, size_t ssid_capacity,
+                                      char *password, size_t password_capacity);
 bool gateway_config_add_wifi(gateway_config_t *config, const char *ssid,
                              const char *password);
 bool gateway_config_remove_wifi(gateway_config_t *config, const char *ssid);
