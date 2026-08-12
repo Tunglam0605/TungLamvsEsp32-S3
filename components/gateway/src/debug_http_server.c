@@ -13,10 +13,16 @@
 #include "laser_can_bringup.h"
 #include "warehouse_http.h"
 #include "gateway_config_http.h"
+#include "gateway_debug_page.h"
+#include "gateway_web_theme.h"
+#include "gateway_auth.h"
+#include "gateway_auth_http.h"
+#include "gateway_admin_http.h"
 
 static const char *TAG = "DEBUG_HTTP";
 static httpd_handle_t s_server;
 
+#if 0
 static const char DEBUG_PAGE[] =
     "<!doctype html><html lang='vi'><head>"
     "<meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
@@ -99,6 +105,8 @@ static const char DEBUG_PAGE[] =
     "$('dialogCancel').addEventListener('click',()=>{pendingConfig=null;$('configDialog').close()});$('configDialog').addEventListener('cancel',()=>{pendingConfig=null});$('dialogConfirm').addEventListener('click',async()=>{if(!pendingConfig)return;const request=pendingConfig;pendingConfig=null;$('configDialog').close();const body=new URLSearchParams(request);$('applyConfig').disabled=true;set('configFeedback','Đang gửi yêu cầu bắt tay cấu hình...');try{const r=await fetch('/api/laser/config',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});if(!r.ok)throw Error(await r.text());const result=await r.json();set('configFeedback','Đã yêu cầu Nhóm '+result.group+'. Đang chờ cảm biến nhận cấu hình.');$('configFeedback').className='feedback ok'}catch(err){set('configFeedback','Gửi thất bại: '+err.message);$('configFeedback').className='feedback bad'}finally{$('applyConfig').disabled=false}});"
     "$('toggle').addEventListener('click',()=>{paused=!paused;$('toggle').setAttribute('aria-pressed',paused);$('toggle').setAttribute('aria-label',paused?'Tiếp tục cập nhật':'Tạm dừng cập nhật');set('toggleText',paused?'Tiếp tục':'Tạm dừng');$('toggleIcon').innerHTML=paused?\"<path d='m8 5 11 7-11 7z'/>\":\"<path d='M8 5h3v14H8zm5 0h3v14h-3z'/>\";if(paused){clearTimeout(timer);set('updated','Đã tạm dừng')}else poll()});renderMatrix();poll();</script></body></html>";
 
+#endif
+
 static const char *can_state_name(bsp_can_state_t state)
 {
     switch (state) {
@@ -112,13 +120,13 @@ static const char *can_state_name(bsp_can_state_t state)
 
 static esp_err_t page_handler(httpd_req_t *req)
 {
-    httpd_resp_set_type(req, "text/html; charset=utf-8");
-    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
-    return httpd_resp_send(req, DEBUG_PAGE, HTTPD_RESP_USE_STRLEN);
+    if (!gateway_auth_require_page(req, GW_PERMISSION_CAN_DEBUG, NULL)) return ESP_OK;
+    return gateway_web_send_html(req, GATEWAY_DEBUG_PAGE);
 }
 
 static esp_err_t status_handler(httpd_req_t *req)
 {
+    if (!gateway_auth_require_api(req, GW_PERMISSION_CAN_DEBUG, NULL)) return ESP_OK;
     bsp_eth_status_t eth = { 0 };
     bsp_can_status_t can = { 0 };
     laser_can_bringup_status_t laser = { 0 };
@@ -247,6 +255,7 @@ static bool parse_u32_field(const char *body, const char *key, uint32_t max,
 
 static esp_err_t config_handler(httpd_req_t *req)
 {
+    if (!gateway_auth_require_api(req, GW_PERMISSION_LASER_CONFIG, NULL)) return ESP_OK;
     if (req->content_len == 0U || req->content_len >= 256U) {
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid request body");
     }
@@ -308,7 +317,7 @@ esp_err_t debug_http_server_start(void)
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = 80;
-    config.max_uri_handlers = 20;
+    config.max_uri_handlers = 48;
     /* Debug JSON can include all 64 physical LaserIDs plus group status. */
     config.stack_size = 12288;
     esp_err_t err = httpd_start(&s_server, &config);
@@ -318,14 +327,31 @@ esp_err_t debug_http_server_start(void)
     }
 
     const httpd_uri_t debug = { .uri = "/debug", .method = HTTP_GET, .handler = page_handler };
+    const httpd_uri_t tech = { .uri = "/app/tech", .method = HTTP_GET, .handler = page_handler };
     const httpd_uri_t status = {
         .uri = "/api/debug/status", .method = HTTP_GET, .handler = status_handler
+    };
+    const httpd_uri_t tech_status = {
+        .uri = "/api/tech/status", .method = HTTP_GET, .handler = status_handler
+    };
+    const httpd_uri_t tech_can = {
+        .uri = "/api/tech/can", .method = HTTP_GET, .handler = status_handler
+    };
+    const httpd_uri_t tech_laser = {
+        .uri = "/api/tech/laser", .method = HTTP_GET, .handler = status_handler
     };
     const httpd_uri_t configure = {
         .uri = "/api/laser/config", .method = HTTP_POST, .handler = config_handler
     };
-    if ((err = httpd_register_uri_handler(s_server, &debug)) != ESP_OK ||
+    if ((err = gateway_web_theme_register(s_server)) != ESP_OK ||
+        (err = gateway_auth_http_register(s_server)) != ESP_OK ||
+        (err = gateway_admin_http_register(s_server)) != ESP_OK ||
+        (err = httpd_register_uri_handler(s_server, &debug)) != ESP_OK ||
+        (err = httpd_register_uri_handler(s_server, &tech)) != ESP_OK ||
         (err = httpd_register_uri_handler(s_server, &status)) != ESP_OK ||
+        (err = httpd_register_uri_handler(s_server, &tech_status)) != ESP_OK ||
+        (err = httpd_register_uri_handler(s_server, &tech_can)) != ESP_OK ||
+        (err = httpd_register_uri_handler(s_server, &tech_laser)) != ESP_OK ||
         (err = httpd_register_uri_handler(s_server, &configure)) != ESP_OK ||
         (err = warehouse_http_register(s_server)) != ESP_OK ||
         (err = gateway_config_http_register(s_server)) != ESP_OK) {

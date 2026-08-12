@@ -5,7 +5,16 @@
 #include <string.h>
 
 #include "warehouse_manager.h"
+#include "gateway_warehouse_page.h"
+#include "gateway_public_page.h"
+#include "gateway_web_theme.h"
+#include "gateway_auth.h"
+#include "gateway_config.h"
+#include "gateway_mqtt.h"
+#include "gateway_network.h"
+#include "bsp_can.h"
 
+#if 0
 static const char PAGE[] =
 "<!doctype html><html lang='vi'><head><meta charset='utf-8'>"
 "<meta name='viewport' content='width=device-width,initial-scale=1'>"
@@ -42,7 +51,7 @@ static const char PAGE[] =
 "<div class='actions full'><button type='button' onclick='dlg.close()'>Hủy</button><button class='save'>Lưu cấu hình</button></div>"
 "</form></dialog><script>"
 "const $=x=>document.getElementById(x);let snap,nodes=[],editing=0;"
-"const esc=x=>String(x??'').replace(/[&<>\"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[c]));"
+"const esc=x=>String(x===undefined||x===null?'':x).replace(/[&<>\"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[c]));"
 "async function load(){snap=await(await fetch('/api/warehouse/status',{cache:'no-store'})).json();"
 "try{nodes=(await(await fetch('/api/debug/status',{cache:'no-store'})).json()).nodes||[]}catch(e){}render();setTimeout(load,1000)}"
 "function render(){$('p8').className=snap.profile==='GROUP_8'?'active':'';$('p12').className=snap.profile==='GROUP_12'?'active':'';"
@@ -69,11 +78,17 @@ static const char PAGE[] =
 "high_row:$('row').value,enabled:$('enabled').checked?1:0,proximity:$('proximity').checked?1:0};"
 "const r=await fetch('/api/warehouse/position',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(p)});"
 "if(!r.ok){$('err').textContent=await r.text();return}dlg.close();load()};load()</script></body></html>";
+#endif
 
 static esp_err_t page(httpd_req_t *request)
 {
-    httpd_resp_set_type(request, "text/html; charset=utf-8");
-    return httpd_resp_send(request, PAGE, HTTPD_RESP_USE_STRLEN);
+    return gateway_web_send_html(request, GATEWAY_PUBLIC_PAGE);
+}
+
+static esp_err_t factory_page(httpd_req_t *request)
+{
+    if (!gateway_auth_require_page(request, GW_PERMISSION_WAREHOUSE_CONFIG, NULL)) return ESP_OK;
+    return gateway_web_send_html(request, GATEWAY_WAREHOUSE_PAGE);
 }
 
 static size_t json_escape(char *output, size_t capacity, const char *input)
@@ -101,6 +116,7 @@ static size_t json_escape(char *output, size_t capacity, const char *input)
 
 static esp_err_t status(httpd_req_t *request)
 {
+    if (!gateway_auth_require_api(request, GW_PERMISSION_WAREHOUSE_CONFIG, NULL)) return ESP_OK;
     warehouse_snapshot_t snapshot;
     warehouse_manager_snapshot(&snapshot);
     char buffer[640];
@@ -138,6 +154,69 @@ static esp_err_t status(httpd_req_t *request)
     return httpd_resp_send_chunk(request, NULL, 0);
 }
 
+static esp_err_t public_status(httpd_req_t *request)
+{
+    warehouse_snapshot_t snapshot;
+    warehouse_manager_snapshot(&snapshot);
+    gateway_config_t config;
+    gateway_config_get(&config);
+    bsp_can_status_t can = {0};
+    bsp_can_get_status(&can);
+    char gateway_id[40], network_name[96];
+    json_escape(gateway_id, sizeof(gateway_id), config.gateway_id);
+    json_escape(network_name, sizeof(network_name), gateway_network_active_name());
+    char buffer[520];
+    int length = snprintf(buffer, sizeof(buffer),
+        "{\"gateway\":\"%s\",\"profile\":\"%s\",\"online\":%u,\"empty\":%u,"
+        "\"occupied\":%u,\"unknown\":%u,\"network\":{\"connected\":%s,\"name\":\"%s\"},"
+        "\"mqtt\":%s,\"can\":\"%s\",\"positions\":[",
+        gateway_id, laser_profile_name(snapshot.profile), snapshot.online,
+        snapshot.empty, snapshot.occupied, snapshot.unknown,
+        gateway_network_production_available() ? "true" : "false",
+        network_name, gateway_mqtt_is_connected() ? "true" : "false",
+        can.state == BSP_CAN_STATE_ACTIVE ? "ACTIVE" :
+        can.state == BSP_CAN_STATE_WARNING ? "WARNING" :
+        can.state == BSP_CAN_STATE_PASSIVE ? "PASSIVE" :
+        can.state == BSP_CAN_STATE_BUS_OFF ? "BUS-OFF" : "STOPPED");
+    httpd_resp_set_type(request, "application/json; charset=utf-8");
+    httpd_resp_send_chunk(request, buffer, length);
+    for (uint8_t i = 0; i < snapshot.group_count; ++i) {
+        const warehouse_position_t *position = &snapshot.positions[i];
+        char code[WAREHOUSE_CODE_LEN * 2U];
+        json_escape(code, sizeof(code), position->config.warehouse_code);
+        length = snprintf(buffer, sizeof(buffer),
+            "%s{\"group_id\":%u,\"laser_id\":%u,\"warehouse_code\":\"%s\","
+            "\"state\":\"%s\",\"sensor_online\":%s}", i ? "," : "",
+            i + 1U, position->config.laser_id, code,
+            warehouse_state_name(position->state), position->sensor_online ? "true" : "false");
+        httpd_resp_send_chunk(request, buffer, length);
+    }
+    httpd_resp_send_chunk(request, "]}", 2U);
+    return httpd_resp_send_chunk(request, NULL, 0U);
+}
+
+static esp_err_t factory_lasers(httpd_req_t *request)
+{
+    if (!gateway_auth_require_api(request, GW_PERMISSION_WAREHOUSE_CONFIG, NULL)) return ESP_OK;
+    httpd_resp_set_type(request, "application/json; charset=utf-8");
+    httpd_resp_set_hdr(request, "Cache-Control", "no-store");
+    esp_err_t error = httpd_resp_send_chunk(request, "{\"nodes\":[", 10U);
+    char json[64];
+    bool first = true;
+    for (uint8_t id = 1U; error == ESP_OK && id <= LASER_CAN_MAX_NODES; ++id) {
+        laser_can_node_status_t node = {0};
+        if (!laser_can_bringup_get_node(id, &node)) continue;
+        const int length = snprintf(json, sizeof(json),
+            "%s{\"id\":%u,\"alive\":%s}", first ? "" : ",", id,
+            node.alive ? "true" : "false");
+        error = httpd_resp_send_chunk(request, json, length);
+        first = false;
+    }
+    if (error == ESP_OK) error = httpd_resp_send_chunk(request, "]}", 2U);
+    if (error == ESP_OK) error = httpd_resp_send_chunk(request, NULL, 0U);
+    return error;
+}
+
 static bool field(const char *body, const char *key, char *output, size_t capacity)
 {
     return httpd_query_key_value(body, key, output, capacity) == ESP_OK;
@@ -161,6 +240,7 @@ static esp_err_t send_conflict(httpd_req_t *request, const char *message)
 
 static esp_err_t set_profile(httpd_req_t *request)
 {
+    if (!gateway_auth_require_api(request, GW_PERMISSION_WAREHOUSE_CONFIG, NULL)) return ESP_OK;
     char body[128] = {0}, profile_name[16] = {0}, clear[4] = {0};
     if (read_body(request, body, sizeof(body)) != ESP_OK ||
         !field(body, "profile", profile_name, sizeof(profile_name))) {
@@ -177,6 +257,7 @@ static esp_err_t set_profile(httpd_req_t *request)
 
 static esp_err_t set_position(httpd_req_t *request)
 {
+    if (!gateway_auth_require_api(request, GW_PERMISSION_WAREHOUSE_CONFIG, NULL)) return ESP_OK;
     char body[512] = {0}, value[64];
     if (read_body(request, body, sizeof(body)) != ESP_OK) {
         return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Dữ liệu quá dài");
@@ -209,27 +290,48 @@ static esp_err_t set_position(httpd_req_t *request)
         return httpd_resp_send_err(request, HTTPD_500_INTERNAL_SERVER_ERROR,
                                    "Không thể lưu NVS");
     }
-    if (position.enabled) {
-        const laser_can_config_request_t config = {
-            .laser_id = position.laser_id,
-            .distance_mm = position.distance_mm,
-            .distance_emergency_mm = position.distance_emergency_mm,
-            .low_col = position.low_col,
-            .high_row = position.high_row,
-            .proximity_enabled = position.proximity_enabled,
-        };
-        (void)laser_can_bringup_configure(&config, NULL);
-    }
     return httpd_resp_sendstr(request, "{\"ok\":true}");
+}
+
+static esp_err_t apply_laser(httpd_req_t *request)
+{
+    if (!gateway_auth_require_api(request, GW_PERMISSION_LASER_CONFIG, NULL)) return ESP_OK;
+    char body[64] = {0}, value[8] = {0};
+    if (read_body(request, body, sizeof(body)) != ESP_OK ||
+        !field(body, "group_id", value, sizeof(value)))
+        return httpd_resp_send_err(request, 400, "Thiếu Group");
+    warehouse_position_t position;
+    if (!warehouse_manager_get_position((uint8_t)atoi(value), &position) ||
+        !position.config.enabled)
+        return httpd_resp_send_err(request, 409, "Vị trí chưa được bật");
+    const laser_can_config_request_t config = {
+        .laser_id = position.config.laser_id,
+        .distance_mm = position.config.distance_mm,
+        .distance_emergency_mm = position.config.distance_emergency_mm,
+        .low_col = position.config.low_col,
+        .high_row = position.config.high_row,
+        .proximity_enabled = position.config.proximity_enabled,
+    };
+    const esp_err_t error = laser_can_bringup_configure(&config, NULL);
+    if (error != ESP_OK) return httpd_resp_send_err(request, 500, esp_err_to_name(error));
+    httpd_resp_set_status(request, "202 Accepted");
+    return httpd_resp_sendstr(request, "{\"accepted\":true}");
 }
 
 esp_err_t warehouse_http_register(httpd_handle_t server)
 {
     const httpd_uri_t handlers[] = {
         {.uri = "/", .method = HTTP_GET, .handler = page},
+        {.uri = "/app/factory", .method = HTTP_GET, .handler = factory_page},
         {.uri = "/api/warehouse/status", .method = HTTP_GET, .handler = status},
+        {.uri = "/api/public/status", .method = HTTP_GET, .handler = public_status},
         {.uri = "/api/warehouse/profile", .method = HTTP_POST, .handler = set_profile},
         {.uri = "/api/warehouse/position", .method = HTTP_POST, .handler = set_position},
+        {.uri = "/api/factory/status", .method = HTTP_GET, .handler = status},
+        {.uri = "/api/factory/lasers", .method = HTTP_GET, .handler = factory_lasers},
+        {.uri = "/api/factory/profile", .method = HTTP_POST, .handler = set_profile},
+        {.uri = "/api/factory/warehouse", .method = HTTP_POST, .handler = set_position},
+        {.uri = "/api/factory/laser/apply", .method = HTTP_POST, .handler = apply_laser},
     };
     for (size_t i = 0; i < sizeof(handlers) / sizeof(handlers[0]); ++i) {
         const esp_err_t error = httpd_register_uri_handler(server, &handlers[i]);

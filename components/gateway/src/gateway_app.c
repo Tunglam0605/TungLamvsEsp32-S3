@@ -13,6 +13,7 @@
 #include "debug_http_server.h"
 #include "esp_log.h"
 #include "gateway_config.h"
+#include "gateway_auth.h"
 #include "gateway_mqtt.h"
 #include "gateway_network.h"
 #include "gateway_status.h"
@@ -39,6 +40,12 @@ esp_err_t gateway_app_run(void)
     }
     gateway_config_t config;
     gateway_config_get(&config);
+
+    err = gateway_auth_init();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Cannot initialize Gateway accounts: %s", esp_err_to_name(err));
+        return err;
+    }
 
     err = bsp_board_init();
     if (err != ESP_OK) {
@@ -72,9 +79,9 @@ esp_err_t gateway_app_run(void)
     }
 
     const platform_time_config_t time_config = {
-        .primary_server = "pool.ntp.org",
-        .fallback_server = "time.google.com",
-        .timezone = "ICT-7",
+        .primary_server = config.sntp_primary,
+        .fallback_server = config.sntp_fallback,
+        .timezone = config.timezone,
     };
     err = platform_time_init(&time_config);
     if (err != ESP_OK) {

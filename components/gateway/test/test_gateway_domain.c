@@ -5,6 +5,47 @@
 #include "warehouse_manager.h"
 #include "gateway_network.h"
 #include "gateway_mqtt_json.h"
+#include "gateway_auth.h"
+
+TEST_CASE("gateway role permission matrix is exact", "[gateway][auth]")
+{
+    TEST_ASSERT_FALSE(gateway_auth_role_has_permission(GW_ROLE_NONE,
+        GW_PERMISSION_WAREHOUSE_CONFIG));
+    TEST_ASSERT_FALSE(gateway_auth_role_has_permission(GW_ROLE_NONE,
+        GW_PERMISSION_CAN_DEBUG));
+    TEST_ASSERT_FALSE(gateway_auth_role_has_permission(GW_ROLE_NONE,
+        GW_PERMISSION_NETWORK_CONFIG));
+
+    TEST_ASSERT_TRUE(gateway_auth_role_has_permission(GW_ROLE_FACTORY,
+        GW_PERMISSION_WAREHOUSE_CONFIG));
+    TEST_ASSERT_TRUE(gateway_auth_role_has_permission(GW_ROLE_FACTORY,
+        GW_PERMISSION_LASER_CONFIG));
+    TEST_ASSERT_FALSE(gateway_auth_role_has_permission(GW_ROLE_FACTORY,
+        GW_PERMISSION_CAN_DEBUG));
+    TEST_ASSERT_FALSE(gateway_auth_role_has_permission(GW_ROLE_FACTORY,
+        GW_PERMISSION_NETWORK_CONFIG));
+
+    TEST_ASSERT_TRUE(gateway_auth_role_has_permission(GW_ROLE_TECH,
+        GW_PERMISSION_WAREHOUSE_CONFIG));
+    TEST_ASSERT_TRUE(gateway_auth_role_has_permission(GW_ROLE_TECH,
+        GW_PERMISSION_LASER_CONFIG | GW_PERMISSION_CAN_DEBUG | GW_PERMISSION_SYSTEM_DEBUG));
+    TEST_ASSERT_FALSE(gateway_auth_role_has_permission(GW_ROLE_TECH,
+        GW_PERMISSION_NETWORK_CONFIG));
+
+    TEST_ASSERT_TRUE(gateway_auth_role_has_permission(GW_ROLE_IT,
+        GW_PERMISSION_NETWORK_CONFIG | GW_PERMISSION_MQTT_CONFIG));
+    TEST_ASSERT_FALSE(gateway_auth_role_has_permission(GW_ROLE_IT,
+        GW_PERMISSION_LASER_CONFIG));
+    TEST_ASSERT_FALSE(gateway_auth_role_has_permission(GW_ROLE_IT,
+        GW_PERMISSION_CAN_DEBUG));
+
+    const gateway_permission_t all = GW_PERMISSION_VIEW_PUBLIC |
+        GW_PERMISSION_WAREHOUSE_CONFIG | GW_PERMISSION_LASER_CONFIG |
+        GW_PERMISSION_CAN_DEBUG | GW_PERMISSION_SYSTEM_DEBUG |
+        GW_PERMISSION_NETWORK_CONFIG | GW_PERMISSION_MQTT_CONFIG |
+        GW_PERMISSION_USER_MANAGEMENT;
+    TEST_ASSERT_TRUE(gateway_auth_role_has_permission(GW_ROLE_SUPER_ADMIN, all));
+}
 
 TEST_CASE("laser profile exact boundaries", "[gateway]")
 {

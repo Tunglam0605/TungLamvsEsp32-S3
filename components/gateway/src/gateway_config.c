@@ -15,7 +15,6 @@ static void defaults(gateway_config_t *c)
     memset(c, 0, sizeof(*c));
     snprintf(c->gateway_id, sizeof(c->gateway_id), "GW-01");
     snprintf(c->ap_password, sizeof(c->ap_password), "gateway123");
-    snprintf(c->web_password, sizeof(c->web_password), "aubot");
     c->wifi_dhcp = true;
     snprintf(c->wifi_ip, sizeof(c->wifi_ip), "192.168.1.204");
     snprintf(c->wifi_netmask, sizeof(c->wifi_netmask), "255.255.255.0");
@@ -30,6 +29,9 @@ static void defaults(gateway_config_t *c)
     c->mqtt_port = 1883;
     c->mqtt_transport = GATEWAY_MQTT_TCP;
     c->publish_interval_ms = 1000;
+    snprintf(c->sntp_primary, sizeof(c->sntp_primary), "pool.ntp.org");
+    snprintf(c->sntp_fallback, sizeof(c->sntp_fallback), "time.google.com");
+    snprintf(c->timezone, sizeof(c->timezone), "ICT-7");
     gateway_config_add_wifi(c, "Robotics AUBOT 1", "123456789");
 }
 
@@ -48,7 +50,6 @@ esp_err_t gateway_config_init(void)
     if (err != ESP_OK) return err;
     get_str(&h, "gw_id", s_config.gateway_id, sizeof(s_config.gateway_id));
     get_str(&h, "ap_pass", s_config.ap_password, sizeof(s_config.ap_password));
-    get_str(&h, "web_pass", s_config.web_password, sizeof(s_config.web_password));
     get_str(&h, "wifi_ip", s_config.wifi_ip, sizeof(s_config.wifi_ip));
     get_str(&h, "wifi_mask", s_config.wifi_netmask, sizeof(s_config.wifi_netmask));
     get_str(&h, "wifi_gw", s_config.wifi_gateway, sizeof(s_config.wifi_gateway));
@@ -60,6 +61,9 @@ esp_err_t gateway_config_init(void)
     get_str(&h, "mq_host", s_config.mqtt_broker, sizeof(s_config.mqtt_broker));
     get_str(&h, "mq_user", s_config.mqtt_user, sizeof(s_config.mqtt_user));
     get_str(&h, "mq_pass", s_config.mqtt_password, sizeof(s_config.mqtt_password));
+    get_str(&h, "ntp_main", s_config.sntp_primary, sizeof(s_config.sntp_primary));
+    get_str(&h, "ntp_alt", s_config.sntp_fallback, sizeof(s_config.sntp_fallback));
+    get_str(&h, "timezone", s_config.timezone, sizeof(s_config.timezone));
     bool found = false;
     uint8_t v8 = 0;
     uint16_t v16 = 0;
@@ -91,20 +95,22 @@ void gateway_config_get(gateway_config_t *config)
 esp_err_t gateway_config_save(const gateway_config_t *c)
 {
     if (!c || c->gateway_id[0] == 0 || c->wifi_profile_count > GATEWAY_WIFI_PROFILE_MAX ||
-        c->mqtt_port == 0 || c->publish_interval_ms < 250 || c->publish_interval_ms > 60000) return ESP_ERR_INVALID_ARG;
+        c->mqtt_port == 0 || c->publish_interval_ms < 250 || c->publish_interval_ms > 60000 ||
+        c->sntp_primary[0] == 0 || c->timezone[0] == 0) return ESP_ERR_INVALID_ARG;
     platform_nvs_handle_t h = {0};
     esp_err_t e = platform_nvs_open(&h, NS, false);
 #define SETS(k,v) do { if (e == ESP_OK) e = platform_nvs_set_string(&h,(k),(v)); } while (0)
 #define SET8(k,v) do { if (e == ESP_OK) e = platform_nvs_set_u8(&h,(k),(v)); } while (0)
 #define SET16(k,v) do { if (e == ESP_OK) e = platform_nvs_set_u16(&h,(k),(v)); } while (0)
     if (e != ESP_OK) return e;
-    SETS("gw_id", c->gateway_id); SETS("ap_pass", c->ap_password); SETS("web_pass", c->web_password);
+    SETS("gw_id", c->gateway_id); SETS("ap_pass", c->ap_password);
     SET8("wifi_dhcp", c->wifi_dhcp); SETS("wifi_ip", c->wifi_ip); SETS("wifi_mask", c->wifi_netmask);
     SETS("wifi_gw", c->wifi_gateway); SETS("wifi_dns", c->wifi_dns);
     SET8("eth_mode", c->eth_router_mode); SET8("eth_dhcp", c->eth_dhcp); SETS("eth_ip", c->eth_ip); SETS("eth_mask", c->eth_netmask);
     SETS("eth_gw", c->eth_gateway); SETS("eth_dns", c->eth_dns);
     SETS("mq_host", c->mqtt_broker); SET16("mq_port", c->mqtt_port); SET8("mq_tls", c->mqtt_transport == GATEWAY_MQTT_TLS);
     SETS("mq_user", c->mqtt_user); SETS("mq_pass", c->mqtt_password); SET16("pub_ms", c->publish_interval_ms);
+    SETS("ntp_main", c->sntp_primary); SETS("ntp_alt", c->sntp_fallback); SETS("timezone", c->timezone);
     SET8("wifi_count", c->wifi_profile_count);
     for (uint8_t i = 0; i < GATEWAY_WIFI_PROFILE_MAX; ++i) {
         char key[8]; const char *ssid = i < c->wifi_profile_count ? c->wifi_profiles[i].ssid : "";

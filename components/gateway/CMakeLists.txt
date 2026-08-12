@@ -12,6 +12,14 @@ idf_component_register(SRCS "src/gateway_app.c"
                             "src/gateway_status.c"
                             "src/gateway_indicator.c"
                             "src/gateway_config_page.c"
+                            "src/gateway_web_theme.c"
+                            "src/gateway_warehouse_page.c"
+                            "src/gateway_debug_page.c"
+                            "src/gateway_auth.c"
+                            "src/gateway_auth_http.c"
+                            "src/gateway_admin_http.c"
+                            "src/gateway_public_page.c"
                        INCLUDE_DIRS "include"
-                       REQUIRES bsp platform_wifi platform_nvs platform_time esp_http_server esp_timer mqtt mbedtls)
+                       REQUIRES bsp platform_wifi platform_nvs platform_time esp_http_server esp_timer mqtt mbedtls
+                       EMBED_FILES "company-logo-transparent.png")
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-error=trigraphs)

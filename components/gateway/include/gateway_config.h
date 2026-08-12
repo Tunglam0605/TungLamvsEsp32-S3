@@ -19,7 +19,6 @@ typedef enum {
 typedef struct {
     char gateway_id[17];
     char ap_password[64];
-    char web_password[64];
     gateway_wifi_profile_t wifi_profiles[GATEWAY_WIFI_PROFILE_MAX];
     uint8_t wifi_profile_count;
     bool wifi_dhcp;
@@ -39,6 +38,9 @@ typedef struct {
     char mqtt_user[48];
     char mqtt_password[64];
     uint16_t publish_interval_ms;
+    char sntp_primary[64];
+    char sntp_fallback[64];
+    char timezone[64];
 } gateway_config_t;
 
 esp_err_t gateway_config_init(void);
