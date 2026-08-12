@@ -34,7 +34,7 @@
 #define LASER_CAN_EMERGENCY_ID_FIRST    100U
 #define LASER_CAN_NORMAL_ID_FIRST       110U
 #define LASER_CAN_HEARTBEAT_PERIOD_MS   2000U
-#define LASER_CAN_B300_GROUP_COUNT      LASER_CAN_GROUP_COUNT
+#define LASER_CAN_B300_GROUP_COUNT      LASER_PROFILE_MAX_GROUPS
 #define LASER_CAN_HEALTH_PERIOD_MS      10000U
 #define LASER_CAN_NODE_TIMEOUT_MS       5000U
 #define LASER_CAN_OBSTACLE_TIMEOUT_MS   2000U
@@ -63,17 +63,13 @@ static laser_can_bringup_status_t s_status;
 static laser_can_node_status_t s_nodes[LASER_CAN_MAX_NODES];
 static laser_group_config_t s_group_config[LASER_CAN_B300_GROUP_COUNT];
 static laser_group_obstacle_t s_group_obstacle[LASER_CAN_B300_GROUP_COUNT];
+static laser_profile_t s_profile = LASER_PROFILE_GROUP_8;
 
 static uint8_t b300_group_for_laser(uint8_t laser_id)
 {
-    if (laser_id <= 10U) return 0U;
-    if (laser_id <= 20U) return 1U;
-    if (laser_id <= 30U) return 2U;
-    if (laser_id <= 40U) return 3U;
-    if (laser_id <= 46U) return 4U;
-    if (laser_id <= 52U) return 5U;
-    if (laser_id <= 58U) return 6U;
-    return 7U;
+    uint8_t group_id = 0U;
+    return laser_profile_group_for_id(s_profile, laser_id, &group_id)
+               ? (uint8_t)(group_id - 1U) : UINT8_MAX;
 }
 
 static bool frame_laser_id(const bsp_can_frame_t *frame, uint8_t *laser_id)
@@ -250,21 +246,22 @@ static void reply_to_config_request(uint8_t laser_id)
 
 static bool handle_obstacle_event(const bsp_can_frame_t *frame)
 {
-    uint8_t group = 0U;
+    uint8_t group_id = 0U;
+    bool emergency = false;
     const int64_t now_ms = esp_timer_get_time() / 1000LL;
-    if (frame->id >= LASER_CAN_EMERGENCY_ID_FIRST &&
-        frame->id < LASER_CAN_EMERGENCY_ID_FIRST + LASER_CAN_B300_GROUP_COUNT) {
-        group = (uint8_t)(frame->id - LASER_CAN_EMERGENCY_ID_FIRST);
+    if (!laser_profile_group_for_obstacle_can_id(s_profile, frame->id,
+                                                  &group_id, &emergency)) {
+        return false;
+    }
+    const uint8_t group = (uint8_t)(group_id - 1U);
+    if (emergency) {
         taskENTER_CRITICAL(&s_status_mux);
         s_group_obstacle[group].last_emergency_ms = now_ms;
         ++s_group_obstacle[group].emergency_event_count;
         taskEXIT_CRITICAL(&s_status_mux);
         ESP_LOGW(TAG, "OBSTACLE EMERGENCY: B300 group=%u id=0x%03X", group, frame->id);
         return true;
-    }
-    if (frame->id >= LASER_CAN_NORMAL_ID_FIRST &&
-        frame->id < LASER_CAN_NORMAL_ID_FIRST + LASER_CAN_B300_GROUP_COUNT) {
-        group = (uint8_t)(frame->id - LASER_CAN_NORMAL_ID_FIRST);
+    } else {
         taskENTER_CRITICAL(&s_status_mux);
         s_group_obstacle[group].last_normal_ms = now_ms;
         ++s_group_obstacle[group].normal_event_count;
@@ -272,7 +269,6 @@ static bool handle_obstacle_event(const bsp_can_frame_t *frame)
         ESP_LOGI(TAG, "OBSTACLE NORMAL: B300 group=%u id=0x%03X", group, frame->id);
         return true;
     }
-    return false;
 }
 
 static void handle_rx_frame(const bsp_can_frame_t *frame)
@@ -452,7 +448,7 @@ bool laser_can_bringup_get_node(uint8_t laser_id, laser_can_node_status_t *node)
 
 bool laser_can_bringup_get_group(uint8_t group, laser_can_group_status_t *status)
 {
-    if (status == NULL || group >= LASER_CAN_B300_GROUP_COUNT) {
+    if (status == NULL || group >= laser_profile_group_count(s_profile)) {
         return false;
     }
     const int64_t now_ms = esp_timer_get_time() / 1000LL;
@@ -494,15 +490,15 @@ esp_err_t laser_can_bringup_configure(const laser_can_config_request_t *request,
     bool detected = false;
     taskENTER_CRITICAL(&s_status_mux);
     detected = s_nodes[request->laser_id - 1U].detected;
-    if (detected) {
-        s_group_config[group] = (laser_group_config_t) {
+    s_group_config[group] = (laser_group_config_t) {
             .armed = true,
             .distance_mm = request->distance_mm,
             .distance_emergency_mm = request->distance_emergency_mm,
             .low_col = request->low_col,
             .high_row = request->high_row,
             .proximity_enabled = request->proximity_enabled,
-        };
+    };
+    if (detected) {
         for (uint8_t index = 0U; index < LASER_CAN_MAX_NODES; ++index) {
             if (s_nodes[index].detected && s_nodes[index].group == group) {
                 s_nodes[index].config_managed = true;
@@ -511,15 +507,16 @@ esp_err_t laser_can_bringup_configure(const laser_can_config_request_t *request,
         }
     }
     taskEXIT_CRITICAL(&s_status_mux);
-    if (!detected) {
-        return ESP_ERR_NOT_FOUND;
-    }
-
     const bsp_can_frame_t proximity = {
         .id = 0x002U,
         .dlc = 2U,
         .data = { group, request->proximity_enabled ? 1U : 0U },
     };
+    if (!detected) {
+        if (group_out != NULL) *group_out = group;
+        ESP_LOGI(TAG, "Config armed for offline LaserID=%u group=%u", request->laser_id, group);
+        return ESP_OK;
+    }
     esp_err_t err = bsp_can_send(&proximity, 100U);
     if (err != ESP_OK) {
         return err;
@@ -539,6 +536,28 @@ esp_err_t laser_can_bringup_configure(const laser_can_config_request_t *request,
     ESP_LOGI(TAG, "Config armed by API: LaserID=%u B300 group=%u enable=%u",
              request->laser_id, group, request->proximity_enabled);
     return err;
+}
+
+esp_err_t laser_can_bringup_set_profile(laser_profile_t profile)
+{
+    if (!laser_profile_valid(profile)) return ESP_ERR_INVALID_ARG;
+    taskENTER_CRITICAL(&s_status_mux);
+    s_profile = profile;
+    memset(s_group_obstacle, 0, sizeof(s_group_obstacle));
+    for (uint8_t i = 0; i < LASER_CAN_MAX_NODES; ++i) {
+        if (s_nodes[i].detected) s_nodes[i].group = b300_group_for_laser(s_nodes[i].laser_id);
+    }
+    taskEXIT_CRITICAL(&s_status_mux);
+    ESP_LOGI(TAG, "Laser profile selected: %s", laser_profile_name(profile));
+    return ESP_OK;
+}
+
+laser_profile_t laser_can_bringup_profile(void)
+{
+    taskENTER_CRITICAL(&s_status_mux);
+    laser_profile_t profile = s_profile;
+    taskEXIT_CRITICAL(&s_status_mux);
+    return profile;
 }
 
 const char *laser_can_config_state_name(laser_config_state_t state)

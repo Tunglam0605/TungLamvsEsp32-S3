@@ -3,64 +3,79 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-
 #include "esp_err.h"
+#include "laser_profile.h"
 #include "laser_can_bringup.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-#define WAREHOUSE_MAX_CLUSTERS 16U
-#define WAREHOUSE_SLOT_CODE_LEN 16U
-#define WAREHOUSE_SLOT_NAME_LEN 32U
+#define WAREHOUSE_POSITION_MAX LASER_PROFILE_MAX_GROUPS
+#define WAREHOUSE_CODE_LEN 16U
+#define WAREHOUSE_NAME_LEN 32U
 
 typedef enum {
-    WAREHOUSE_SLOT_OFFLINE = 0,
-    WAREHOUSE_SLOT_WAITING,
-    WAREHOUSE_SLOT_EMPTY,
-    WAREHOUSE_SLOT_OCCUPIED,
-    WAREHOUSE_SLOT_CRITICAL,
-} warehouse_slot_state_t;
+    WAREHOUSE_STATE_UNKNOWN = 0,
+    WAREHOUSE_STATE_EMPTY,
+    WAREHOUSE_STATE_OCCUPIED,
+} warehouse_state_t;
+
+typedef enum {
+    WAREHOUSE_VALID = 0,
+    WAREHOUSE_INVALID_GROUP,
+    WAREHOUSE_INVALID_LASER_ID,
+    WAREHOUSE_DUPLICATE_LASER_ID,
+    WAREHOUSE_DUPLICATE_CODE,
+    WAREHOUSE_INVALID_DISTANCE,
+    WAREHOUSE_INVALID_TEXT,
+    WAREHOUSE_PROFILE_CONFLICT,
+} warehouse_validation_t;
 
 typedef struct {
-    bool assigned;
+    bool enabled;
+    uint8_t group_id;
     uint8_t laser_id;
-    uint8_t slot_index; /* 1..64: thu tu bit logic tren MQTT, doc lap LaserID */
-    uint8_t cluster_id;
-    char slot_code[WAREHOUSE_SLOT_CODE_LEN];
-    char slot_name[WAREHOUSE_SLOT_NAME_LEN];
-} warehouse_mapping_t;
-
-typedef struct {
-    warehouse_mapping_t mapping;
-    bool sensor_detected;
-    bool sensor_online;
-    uint8_t b300_group;
-    warehouse_slot_state_t state;
-    int64_t last_seen_ms;
-    bool proximity_enabled;
+    char warehouse_code[WAREHOUSE_CODE_LEN];
+    char warehouse_name[WAREHOUSE_NAME_LEN];
     uint16_t distance_mm;
     uint16_t distance_emergency_mm;
-} warehouse_slot_status_t;
+    uint8_t low_col;
+    uint8_t high_row;
+    bool proximity_enabled;
+} warehouse_position_config_t;
 
 typedef struct {
-    uint16_t assigned;
-    uint16_t online;
-    uint16_t offline;
-    uint16_t empty;
-    uint16_t occupied;
-    uint16_t critical;
-} warehouse_summary_t;
+    warehouse_position_config_t config;
+    warehouse_state_t state;
+    bool sensor_detected;
+    bool sensor_online;
+    bool status_valid;
+    int64_t last_seen_ago_ms;
+    uint16_t distance_mm;
+    uint16_t distance_emergency_mm;
+    laser_obstacle_state_t warn;
+    laser_config_state_t config_state;
+} warehouse_position_t;
+
+typedef struct {
+    laser_profile_t profile;
+    uint8_t group_count;
+    uint8_t configured;
+    uint8_t online;
+    uint8_t unknown;
+    uint8_t empty;
+    uint8_t occupied;
+    warehouse_position_t positions[WAREHOUSE_POSITION_MAX];
+} warehouse_snapshot_t;
 
 esp_err_t warehouse_manager_init(void);
-esp_err_t warehouse_manager_set_mapping(const warehouse_mapping_t *mapping);
-esp_err_t warehouse_manager_clear_mapping(uint8_t laser_id);
-bool warehouse_manager_get_mapping(uint8_t laser_id, warehouse_mapping_t *mapping);
-size_t warehouse_manager_get_slots(warehouse_slot_status_t *slots, size_t capacity,
-                                   warehouse_summary_t *summary);
-const char *warehouse_slot_state_name(warehouse_slot_state_t state);
+laser_profile_t warehouse_manager_profile(void);
+warehouse_validation_t warehouse_manager_validate_profile(laser_profile_t profile);
+esp_err_t warehouse_manager_set_profile(laser_profile_t profile, bool clear_conflicts);
+warehouse_validation_t warehouse_manager_validate_position(
+    const warehouse_position_config_t *position);
+esp_err_t warehouse_manager_set_position(const warehouse_position_config_t *position);
+bool warehouse_manager_get_position(uint8_t group_id, warehouse_position_t *position);
+void warehouse_manager_snapshot(warehouse_snapshot_t *snapshot);
+warehouse_state_t warehouse_state_from_sensor(bool online, bool status_valid,
+                                               laser_obstacle_state_t warn);
+const char *warehouse_state_name(warehouse_state_t state);
+const char *warehouse_validation_name(warehouse_validation_t result);
 
-#ifdef __cplusplus
-}
-#endif

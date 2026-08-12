@@ -3,250 +3,133 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-#include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "platform_nvs.h"
 
-#define WAREHOUSE_NVS_NAMESPACE "warehouse"
+#define NS "warehouse_v3"
+#define DISTANCE_MAX_MM 1200U
 
-static const char *TAG = "WAREHOUSE";
-static warehouse_mapping_t s_mappings[LASER_CAN_MAX_NODES];
-static portMUX_TYPE s_mapping_mux = portMUX_INITIALIZER_UNLOCKED;
+static laser_profile_t s_profile = LASER_PROFILE_GROUP_8;
+static warehouse_position_config_t s_positions[WAREHOUSE_POSITION_MAX];
+static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
 
-static void mapping_key(uint8_t laser_id, char key[8])
-{
-    snprintf(key, 8, "m%02u", laser_id);
-}
-
-static bool valid_text(const char *text, size_t capacity, bool allow_empty)
+static bool valid_text(const char *text, size_t capacity, bool empty_ok)
 {
     if (text == NULL) return false;
-    const size_t len = strnlen(text, capacity);
-    if (len >= capacity || (!allow_empty && len == 0U)) return false;
-    for (size_t i = 0; i < len; ++i) {
-        const unsigned char c = (unsigned char)text[i];
-        if (c == '|' || c < 0x20U) return false;
-    }
+    size_t n = strnlen(text, capacity);
+    if (n >= capacity || (!empty_ok && n == 0U)) return false;
+    for (size_t i = 0; i < n; ++i) if ((unsigned char)text[i] < 0x20U || text[i] == '|') return false;
     return true;
 }
 
-static bool mapping_valid(const warehouse_mapping_t *mapping)
+static void key_for_group(uint8_t group_id, char key[8])
 {
-    return mapping != NULL && mapping->laser_id >= 1U &&
-           mapping->laser_id <= LASER_CAN_MAX_NODES &&
-           mapping->slot_index >= 1U &&
-           mapping->slot_index <= LASER_CAN_MAX_NODES &&
-           mapping->cluster_id >= 1U &&
-           mapping->cluster_id <= WAREHOUSE_MAX_CLUSTERS &&
-           valid_text(mapping->slot_code, sizeof(mapping->slot_code), false) &&
-           valid_text(mapping->slot_name, sizeof(mapping->slot_name), true);
+    snprintf(key, 8, "g%02u", group_id);
 }
 
-static esp_err_t persist_mapping(const warehouse_mapping_t *mapping, bool clear)
+static esp_err_t persist_all(void)
 {
-    platform_nvs_handle_t handle = { 0 };
-    esp_err_t err = platform_nvs_open(&handle, WAREHOUSE_NVS_NAMESPACE, false);
-    if (err != ESP_OK) return err;
-
-    char key[8];
-    mapping_key(mapping->laser_id, key);
-    char value[WAREHOUSE_SLOT_CODE_LEN + WAREHOUSE_SLOT_NAME_LEN + 8U];
-    if (clear) {
-        value[0] = '\0';
-    } else {
-        const int len = snprintf(value, sizeof(value), "%u|%u|%s|%s",
-                                 mapping->slot_index, mapping->cluster_id, mapping->slot_code,
-                                 mapping->slot_name);
-        if (len < 0 || (size_t)len >= sizeof(value)) {
-            platform_nvs_close(&handle);
-            return ESP_ERR_INVALID_SIZE;
-        }
+    platform_nvs_handle_t h = {0};
+    esp_err_t e = platform_nvs_open(&h, NS, false);
+    if (e != ESP_OK) return e;
+    e = platform_nvs_set_u8(&h, "profile", (uint8_t)s_profile);
+    for (uint8_t i = 0; e == ESP_OK && i < WAREHOUSE_POSITION_MAX; ++i) {
+        char key[8], value[96]; key_for_group(i + 1U, key);
+        const warehouse_position_config_t *p = &s_positions[i];
+        int n = snprintf(value, sizeof(value), "%u|%u|%u|%u|%u|%u|%s|%s",
+            p->enabled, p->laser_id, p->distance_mm, p->distance_emergency_mm,
+            p->low_col, p->high_row, p->warehouse_code, p->warehouse_name);
+        if (n < 0 || (size_t)n >= sizeof(value)) { e = ESP_ERR_INVALID_SIZE; break; }
+        e = platform_nvs_set_string(&h, key, value);
     }
-    err = platform_nvs_set_string(&handle, key, value);
-    if (err == ESP_OK) err = platform_nvs_commit(&handle);
-    platform_nvs_close(&handle);
-    return err;
+    if (e == ESP_OK) e = platform_nvs_commit(&h);
+    platform_nvs_close(&h);
+    return e;
 }
 
-static bool decode_mapping(uint8_t laser_id, char *value, warehouse_mapping_t *mapping)
+static bool decode(uint8_t group_id, char *value, warehouse_position_config_t *p)
 {
-    char *first = strchr(value, '|');
-    if (first == NULL) return false;
-    *first++ = '\0';
-    char *second = strchr(first, '|');
-    if (second == NULL) return false;
-    *second++ = '\0';
-
-    /* Schema v2: slot_index|cluster|code|name. Schema cu: cluster|code|name.
-     * Du lieu cu duoc migrate an toan voi slot_index = LaserID. */
-    char *third = strchr(second, '|');
-    uint8_t slot_index = laser_id;
-    char *cluster_text = value;
-    char *code = first;
-    char *name = second;
-    if (third != NULL) {
-        *third++ = '\0';
-        char *end_index = NULL;
-        unsigned long parsed_index = strtoul(value, &end_index, 10);
-        if (end_index == value || *end_index != '\0' || parsed_index < 1UL ||
-            parsed_index > LASER_CAN_MAX_NODES) return false;
-        slot_index = (uint8_t)parsed_index;
-        cluster_text = first;
-        code = second;
-        name = third;
-    }
-
-    char *end = NULL;
-    const unsigned long cluster = strtoul(cluster_text, &end, 10);
-    if (end == cluster_text || *end != '\0' || cluster == 0UL ||
-        cluster > WAREHOUSE_MAX_CLUSTERS) return false;
-
-    *mapping = (warehouse_mapping_t) {
-        .assigned = true,
-        .laser_id = laser_id,
-        .slot_index = slot_index,
-        .cluster_id = (uint8_t)cluster,
-    };
-    snprintf(mapping->slot_code, sizeof(mapping->slot_code), "%s", code);
-    snprintf(mapping->slot_name, sizeof(mapping->slot_name), "%s", name);
-    return mapping_valid(mapping);
+    char *part[8] = {value};
+    for (int i = 1; i < 8; ++i) { part[i] = strchr(part[i-1], '|'); if (!part[i]) return false; *part[i]++ = 0; }
+    memset(p, 0, sizeof(*p)); p->group_id = group_id;
+    p->enabled = strtoul(part[0], NULL, 10) != 0; p->laser_id = strtoul(part[1], NULL, 10);
+    p->distance_mm = strtoul(part[2], NULL, 10); p->distance_emergency_mm = strtoul(part[3], NULL, 10);
+    p->low_col = strtoul(part[4], NULL, 10); p->high_row = strtoul(part[5], NULL, 10);
+    p->proximity_enabled = p->enabled;
+    strlcpy(p->warehouse_code, part[6], sizeof(p->warehouse_code));
+    strlcpy(p->warehouse_name, part[7], sizeof(p->warehouse_name));
+    return true;
 }
 
 esp_err_t warehouse_manager_init(void)
 {
-    memset(s_mappings, 0, sizeof(s_mappings));
-    platform_nvs_handle_t handle = { 0 };
-    esp_err_t err = platform_nvs_open(&handle, WAREHOUSE_NVS_NAMESPACE, true);
-    if (err == ESP_ERR_NOT_FOUND) {
-        ESP_LOGI(TAG, "No warehouse mapping stored yet");
-        return ESP_OK;
-    }
-    if (err != ESP_OK) return err;
+    memset(s_positions, 0, sizeof(s_positions));
+    for (uint8_t i=0;i<WAREHOUSE_POSITION_MAX;i++) s_positions[i].group_id=i+1U;
+    platform_nvs_handle_t h={0}; esp_err_t e=platform_nvs_open(&h,NS,true);
+    if (e == ESP_ERR_NOT_FOUND) return ESP_OK;
+    if (e != ESP_OK) return e;
+    bool found=false; uint8_t profile=0;
+    if(platform_nvs_get_u8(&h,"profile",&profile,&found)==ESP_OK&&found&&laser_profile_valid((laser_profile_t)profile))s_profile=(laser_profile_t)profile;
+    for(uint8_t g=1;g<=WAREHOUSE_POSITION_MAX;g++){char key[8],v[96]={0};key_for_group(g,key);found=false;e=platform_nvs_get_string(&h,key,v,sizeof(v),&found);if(e!=ESP_OK)break;if(found&&v[0]){warehouse_position_config_t p;if(decode(g,v,&p))s_positions[g-1U]=p;}}
+    platform_nvs_close(&h);
+    if (e == ESP_OK) (void)laser_can_bringup_set_profile(s_profile);
+    return e;
+}
 
-    for (uint8_t laser_id = 1U; laser_id <= LASER_CAN_MAX_NODES; ++laser_id) {
-        char key[8];
-        char value[WAREHOUSE_SLOT_CODE_LEN + WAREHOUSE_SLOT_NAME_LEN + 8U] = { 0 };
-        bool found = false;
-        mapping_key(laser_id, key);
-        err = platform_nvs_get_string(&handle, key, value, sizeof(value), &found);
-        if (err != ESP_OK) break;
-        if (!found || value[0] == '\0') continue;
-        warehouse_mapping_t mapping = { 0 };
-        if (decode_mapping(laser_id, value, &mapping)) {
-            s_mappings[laser_id - 1U] = mapping;
-        } else {
-            ESP_LOGW(TAG, "Ignore invalid mapping key %s", key);
-        }
-    }
-    platform_nvs_close(&handle);
+laser_profile_t warehouse_manager_profile(void){taskENTER_CRITICAL(&s_mux);laser_profile_t p=s_profile;taskEXIT_CRITICAL(&s_mux);return p;}
+
+warehouse_validation_t warehouse_manager_validate_profile(laser_profile_t profile)
+{
+    if(!laser_profile_valid(profile))return WAREHOUSE_INVALID_GROUP;
+    uint8_t count=laser_profile_group_count(profile);
+    taskENTER_CRITICAL(&s_mux);
+    for(uint8_t i=0;i<WAREHOUSE_POSITION_MAX;i++){const warehouse_position_config_t *p=&s_positions[i];if(p->enabled&&(p->group_id>count||!laser_profile_id_allowed(profile,p->group_id,p->laser_id))){taskEXIT_CRITICAL(&s_mux);return WAREHOUSE_PROFILE_CONFLICT;}}
+    taskEXIT_CRITICAL(&s_mux);return WAREHOUSE_VALID;
+}
+
+esp_err_t warehouse_manager_set_profile(laser_profile_t profile,bool clear_conflicts)
+{
+    if(!laser_profile_valid(profile))return ESP_ERR_INVALID_ARG;
+    if(!clear_conflicts&&warehouse_manager_validate_profile(profile)!=WAREHOUSE_VALID)return ESP_ERR_INVALID_STATE;
+    taskENTER_CRITICAL(&s_mux);s_profile=profile;if(clear_conflicts){uint8_t n=laser_profile_group_count(profile);for(uint8_t i=0;i<WAREHOUSE_POSITION_MAX;i++)if(s_positions[i].enabled&&(s_positions[i].group_id>n||!laser_profile_id_allowed(profile,s_positions[i].group_id,s_positions[i].laser_id)))memset(&s_positions[i],0,sizeof(s_positions[i])),s_positions[i].group_id=i+1U;}taskEXIT_CRITICAL(&s_mux);
+    esp_err_t err = persist_all();
+    if (err == ESP_OK) err = laser_can_bringup_set_profile(profile);
     return err;
 }
 
-esp_err_t warehouse_manager_set_mapping(const warehouse_mapping_t *mapping)
+warehouse_validation_t warehouse_manager_validate_position(const warehouse_position_config_t *p)
 {
-    if (!mapping_valid(mapping)) return ESP_ERR_INVALID_ARG;
-    for (uint8_t id = 1U; id <= LASER_CAN_MAX_NODES; ++id) {
-        warehouse_mapping_t existing = {0};
-        if (id != mapping->laser_id && warehouse_manager_get_mapping(id, &existing) &&
-            existing.slot_index == mapping->slot_index) return ESP_ERR_INVALID_STATE;
-    }
-    warehouse_mapping_t copy = *mapping;
-    copy.assigned = true;
-    esp_err_t err = persist_mapping(&copy, false);
-    if (err != ESP_OK) return err;
-    taskENTER_CRITICAL(&s_mapping_mux);
-    s_mappings[copy.laser_id - 1U] = copy;
-    taskEXIT_CRITICAL(&s_mapping_mux);
-    ESP_LOGI(TAG, "Mapped LaserID %u to cluster %u slot %s",
-             copy.laser_id, copy.cluster_id, copy.slot_code);
-    return ESP_OK;
+    if(!p||p->group_id==0||p->group_id>laser_profile_group_count(s_profile))return WAREHOUSE_INVALID_GROUP;
+    if(!p->enabled)return WAREHOUSE_VALID;
+    if(!laser_profile_id_allowed(s_profile,p->group_id,p->laser_id))return WAREHOUSE_INVALID_LASER_ID;
+    if(p->distance_mm>DISTANCE_MAX_MM||p->distance_emergency_mm>p->distance_mm)return WAREHOUSE_INVALID_DISTANCE;
+    if(!valid_text(p->warehouse_code,sizeof(p->warehouse_code),false)||!valid_text(p->warehouse_name,sizeof(p->warehouse_name),true))return WAREHOUSE_INVALID_TEXT;
+    taskENTER_CRITICAL(&s_mux);
+    for(uint8_t i=0;i<laser_profile_group_count(s_profile);i++){const warehouse_position_config_t *x=&s_positions[i];if(!x->enabled||x->group_id==p->group_id)continue;if(x->laser_id==p->laser_id){taskEXIT_CRITICAL(&s_mux);return WAREHOUSE_DUPLICATE_LASER_ID;}if(strcmp(x->warehouse_code,p->warehouse_code)==0){taskEXIT_CRITICAL(&s_mux);return WAREHOUSE_DUPLICATE_CODE;}}
+    taskEXIT_CRITICAL(&s_mux);return WAREHOUSE_VALID;
 }
 
-esp_err_t warehouse_manager_clear_mapping(uint8_t laser_id)
+esp_err_t warehouse_manager_set_position(const warehouse_position_config_t *p)
 {
-    if (laser_id == 0U || laser_id > LASER_CAN_MAX_NODES) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    warehouse_mapping_t mapping = { .laser_id = laser_id };
-    esp_err_t err = persist_mapping(&mapping, true);
-    if (err != ESP_OK) return err;
-    taskENTER_CRITICAL(&s_mapping_mux);
-    memset(&s_mappings[laser_id - 1U], 0, sizeof(s_mappings[0]));
-    taskEXIT_CRITICAL(&s_mapping_mux);
-    return ESP_OK;
+    warehouse_validation_t v=warehouse_manager_validate_position(p);if(v!=WAREHOUSE_VALID)return ESP_ERR_INVALID_ARG;
+    taskENTER_CRITICAL(&s_mux);s_positions[p->group_id-1U]=*p;taskEXIT_CRITICAL(&s_mux);return persist_all();
 }
 
-bool warehouse_manager_get_mapping(uint8_t laser_id, warehouse_mapping_t *mapping)
+warehouse_state_t warehouse_state_from_sensor(bool online,bool status_valid,laser_obstacle_state_t warn)
+{if(!online||!status_valid)return WAREHOUSE_STATE_UNKNOWN;return warn==LASER_OBSTACLE_CLEAR?WAREHOUSE_STATE_EMPTY:WAREHOUSE_STATE_OCCUPIED;}
+
+bool warehouse_manager_get_position(uint8_t group_id,warehouse_position_t *out)
 {
-    if (mapping == NULL || laser_id == 0U || laser_id > LASER_CAN_MAX_NODES) {
-        return false;
-    }
-    taskENTER_CRITICAL(&s_mapping_mux);
-    *mapping = s_mappings[laser_id - 1U];
-    taskEXIT_CRITICAL(&s_mapping_mux);
-    return mapping->assigned;
+    if(!out||group_id==0||group_id>laser_profile_group_count(s_profile))return false;
+    warehouse_position_config_t c;taskENTER_CRITICAL(&s_mux);c=s_positions[group_id-1U];taskEXIT_CRITICAL(&s_mux);
+    memset(out,0,sizeof(*out));out->config=c;out->last_seen_ago_ms=-1;out->state=WAREHOUSE_STATE_UNKNOWN;
+    if (!c.enabled) return true;
+    laser_can_node_status_t n={0};out->sensor_detected=laser_can_bringup_get_node(c.laser_id,&n);out->sensor_online=out->sensor_detected&&n.alive;out->status_valid=out->sensor_online&&n.status_valid&&n.obstacle_valid;out->warn=n.obstacle_state;out->config_state=n.config_state;out->distance_mm=n.distance_mm;out->distance_emergency_mm=n.distance_emergency_mm;if(out->sensor_detected){int64_t now=esp_timer_get_time()/1000LL;out->last_seen_ago_ms=now>=n.last_seen_ms?now-n.last_seen_ms:-1;}out->state=warehouse_state_from_sensor(out->sensor_online,out->status_valid,out->warn);return true;
 }
 
-static warehouse_slot_state_t slot_state(const laser_can_node_status_t *node,
-                                         bool detected)
-{
-    if (!detected || !node->alive) return WAREHOUSE_SLOT_OFFLINE;
-    if (!node->status_valid || !node->obstacle_valid) return WAREHOUSE_SLOT_WAITING;
-    /* Nghiệp vụ kho chỉ quan tâm có hàng hay không. Hai mức khoảng cách
-     * NORMAL/EMERGENCY vẫn được giữ ở trang debug kỹ thuật, nhưng đều là
-     * OCCUPIED đối với một vị trí kho. */
-    if (node->obstacle_state == LASER_OBSTACLE_NORMAL ||
-        node->obstacle_state == LASER_OBSTACLE_EMERGENCY) {
-        return WAREHOUSE_SLOT_OCCUPIED;
-    }
-    return WAREHOUSE_SLOT_EMPTY;
-}
+void warehouse_manager_snapshot(warehouse_snapshot_t *s)
+{if(!s)return;memset(s,0,sizeof(*s));s->profile=warehouse_manager_profile();s->group_count=laser_profile_group_count(s->profile);for(uint8_t g=1;g<=s->group_count;g++){warehouse_manager_get_position(g,&s->positions[g-1U]);warehouse_position_t *p=&s->positions[g-1U];if(p->config.enabled)s->configured++;if(p->sensor_online)s->online++;if(p->state==WAREHOUSE_STATE_UNKNOWN)s->unknown++;else if(p->state==WAREHOUSE_STATE_EMPTY)s->empty++;else s->occupied++;}}
 
-size_t warehouse_manager_get_slots(warehouse_slot_status_t *slots, size_t capacity,
-                                   warehouse_summary_t *summary)
-{
-    if (summary != NULL) memset(summary, 0, sizeof(*summary));
-    if (slots == NULL || capacity == 0U) return 0U;
-    const int64_t now_ms = esp_timer_get_time() / 1000LL;
-    size_t count = 0U;
-    for (uint8_t laser_id = 1U; laser_id <= LASER_CAN_MAX_NODES && count < capacity;
-         ++laser_id) {
-        warehouse_mapping_t mapping = { 0 };
-        if (!warehouse_manager_get_mapping(laser_id, &mapping)) continue;
-        laser_can_node_status_t node = { 0 };
-        const bool detected = laser_can_bringup_get_node(laser_id, &node);
-        warehouse_slot_status_t *slot = &slots[count++];
-        *slot = (warehouse_slot_status_t) {
-            .mapping = mapping,
-            .sensor_detected = detected,
-            .sensor_online = detected && node.alive,
-            .b300_group = detected ? (uint8_t)(node.group + 1U) : 0U,
-            .state = slot_state(&node, detected),
-            .last_seen_ms = detected && now_ms >= node.last_seen_ms
-                                ? now_ms - node.last_seen_ms : -1LL,
-            .proximity_enabled = detected && node.proximity_enabled,
-            .distance_mm = detected ? node.distance_mm : 0U,
-            .distance_emergency_mm = detected ? node.distance_emergency_mm : 0U,
-        };
-        if (summary == NULL) continue;
-        ++summary->assigned;
-        if (slot->sensor_online) ++summary->online; else ++summary->offline;
-        if (slot->state == WAREHOUSE_SLOT_EMPTY) ++summary->empty;
-        if (slot->state == WAREHOUSE_SLOT_OCCUPIED) ++summary->occupied;
-        if (slot->state == WAREHOUSE_SLOT_CRITICAL) ++summary->critical;
-    }
-    return count;
-}
-
-const char *warehouse_slot_state_name(warehouse_slot_state_t state)
-{
-    switch (state) {
-    case WAREHOUSE_SLOT_WAITING: return "WAITING";
-    case WAREHOUSE_SLOT_EMPTY: return "EMPTY";
-    case WAREHOUSE_SLOT_OCCUPIED: return "OCCUPIED";
-    case WAREHOUSE_SLOT_CRITICAL: return "CRITICAL";
-    default: return "OFFLINE";
-    }
-}
+const char *warehouse_state_name(warehouse_state_t s){return s==WAREHOUSE_STATE_EMPTY?"EMPTY":s==WAREHOUSE_STATE_OCCUPIED?"OCCUPIED":"UNKNOWN";}
+const char *warehouse_validation_name(warehouse_validation_t v){switch(v){case WAREHOUSE_INVALID_GROUP:return"INVALID_GROUP";case WAREHOUSE_INVALID_LASER_ID:return"LASER_OUT_OF_GROUP";case WAREHOUSE_DUPLICATE_LASER_ID:return"DUPLICATE_LASER_ID";case WAREHOUSE_DUPLICATE_CODE:return"DUPLICATE_WAREHOUSE_CODE";case WAREHOUSE_INVALID_DISTANCE:return"INVALID_DISTANCE";case WAREHOUSE_INVALID_TEXT:return"INVALID_TEXT";case WAREHOUSE_PROFILE_CONFLICT:return"PROFILE_CONFLICT";default:return"VALID";}}
