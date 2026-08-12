@@ -1,10 +1,7 @@
 /**
  * @file    laser_can_bringup.h
- * @brief   Chế độ bring-up CAN không phá hủy cho sensor laser.
- *
- * Module chỉ phục vụ xác minh bus và phát hiện LaserID thực tế trước khi
- * triển khai Laser Protocol Manager đầy đủ. Nó không gửi proximity control,
- * không trả configuration frame và không thay đổi vùng/quãng đường của sensor.
+ * @brief Laser protocol runtime manager for discovery, status, profiles,
+ * configuration handshake, timeout and diagnostics.
  */
 #pragma once
 

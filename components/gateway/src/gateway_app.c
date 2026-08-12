@@ -2,15 +2,8 @@
  * @file    gateway_app.c
  * @brief   Composition root cua firmware Gateway tren ESP32-S3.
  *
- * Gateway chi ghep cac dich vu chung cua board:
- *
- *   Wi-Fi AP + STA  ─┐
- *   Ethernet W5500 ─┼─> tang mang cua Gateway (MQTT/protocol se them sau)
- *   CAN transport  ─┘
- *
- * Module nay khong chua bat ky mapping nut nhan, den thap, Mission hay
- * Callbox portal nao. bsp_can chi la transport; protocol Laser/CAN se dat
- * trong component gateway khi co hop dong protocol chinh thuc.
+ * Composition root only. Dependency direction is:
+ * BSP -> Laser protocol/profile -> Warehouse -> WebUI/MQTT.
  */
 #include "gateway_app.h"
 
@@ -95,8 +88,8 @@ esp_err_t gateway_app_run(void)
         return err;
     }
 
-    /* Chỉ start discovery thụ động: chưa chọn profile B300/MainV2 nên không
-     * gửi config hoặc lệnh proximity có thể tác động đến sensor đang vận hành. */
+    /* Laser runtime owns discovery, Warn/status decode, timeout and explicit
+     * configuration handshake. It never waits for HTTP or MQTT. */
     err = laser_can_bringup_start();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Cannot start laser CAN bring-up: %s", esp_err_to_name(err));
@@ -127,6 +120,6 @@ esp_err_t gateway_app_run(void)
         return err;
     }
 
-    ESP_LOGI(TAG, "Gateway ready: APSTA + Ethernet + CAN laser bring-up initialized");
+    ESP_LOGI(TAG, "Gateway ready: group warehouse + laser runtime + local WebUI");
     return err;
 }

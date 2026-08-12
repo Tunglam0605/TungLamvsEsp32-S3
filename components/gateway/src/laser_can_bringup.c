@@ -1,16 +1,7 @@
 /**
  * @file    laser_can_bringup.c
- * @brief   Test discovery an toàn cho sensor laser trên CAN.
- *
- * Giai đoạn này cố ý chỉ làm hai việc:
- *
- *   1. Phát heartbeat broadcast ID 0x001, DLC 0 mỗi 2 giây.
- *   2. In toàn bộ frame nhận được để xác minh bitrate, LaserID, DLC và data.
- *
- * Theo tài liệu tích hợp, sensor trả heartbeat/status tại ID 20 + LaserID.
- * Khi gặp frame ID 120 + LaserID, module chỉ ghi nhận yêu cầu cấu hình; KHÔNG
- * gửi DLC8 config trả lời vì profile/group/range chưa được xác minh trên bench.
- * Điều này tránh thay đổi trạng thái proximity hoặc vùng an toàn khi bring-up.
+ * @brief Laser protocol runtime: discovery, status/Warn decoding, group profile,
+ * configuration handshake, sensor timeout and CAN health diagnostics.
  */
 #include "laser_can_bringup.h"
 
@@ -390,7 +381,7 @@ esp_err_t laser_can_bringup_start(void)
         return ESP_ERR_NO_MEM;
     }
 
-    ESP_LOGI(TAG, "Safe laser CAN bring-up started: listen-all + heartbeat every %u ms",
+    ESP_LOGI(TAG, "Laser protocol runtime started: heartbeat every %u ms",
              LASER_CAN_HEARTBEAT_PERIOD_MS);
     return ESP_OK;
 }

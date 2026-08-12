@@ -309,8 +309,7 @@ esp_err_t debug_http_server_start(void)
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = 80;
     config.max_uri_handlers = 20;
-    /* API kho chup toi da 64 slot (~5 KiB) tren stack. Stack mac dinh 4 KiB
-     * lam tran stack HTTP, pha hong pbuf va reset sau vai lan poll realtime. */
+    /* Debug JSON can include all 64 physical LaserIDs plus group status. */
     config.stack_size = 12288;
     esp_err_t err = httpd_start(&s_server, &config);
     if (err != ESP_OK) {
