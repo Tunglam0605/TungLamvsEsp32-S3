@@ -1,37 +1,239 @@
 #include "warehouse_http.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
 #include "warehouse_manager.h"
 
 static const char PAGE[] =
-"<!doctype html><html lang='vi'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Quản lý kho</title><style>"
-":root{font-family:Segoe UI,system-ui;color:#eef4ff;background:#07111f}*{box-sizing:border-box}body{margin:0;background:#07111f}.wrap{max-width:1120px;margin:auto;padding:20px}header{display:flex;justify-content:space-between;gap:12px;align-items:center}nav a{color:#bae6fd;margin-left:12px}.mode,.card,dialog{background:#102037;border:1px solid #294563;border-radius:16px;color:#eef4ff}.mode{padding:14px;margin:16px 0;display:flex;gap:10px;align-items:center;flex-wrap:wrap}button,input,select{font:inherit;min-height:44px;border-radius:9px;border:1px solid #3c5877;background:#091629;color:white;padding:0 12px}button{cursor:pointer}.active,.save{background:#0284c7;border-color:#38bdf8}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.card{text-align:left;padding:16px;min-height:145px}.card strong,.card span{display:block}.card .state{font-size:20px;margin:15px 0 5px}.EMPTY{border-color:#22c55e}.OCCUPIED{border-color:#f59e0b}.UNKNOWN{border-color:#64748b}.meta{color:#9eb0c7;font-size:13px}dialog{width:min(580px,calc(100% - 24px));padding:20px}form{display:grid;grid-template-columns:1fr 1fr;gap:12px}label{display:grid;gap:6px;font-size:13px}.full{grid-column:1/-1}.actions{display:flex;justify-content:flex-end;gap:8px}.err{color:#fca5a5;min-height:20px}@media(max-width:700px){.grid{grid-template-columns:repeat(2,1fr)}}@media(max-width:420px){.grid,form{grid-template-columns:1fr}.full{grid-column:auto}}</style></head><body><div class='wrap'><header><div><small>AUBOT GATEWAY</small><h1>Giám sát vị trí kho</h1></div><nav><a href='/debug'>Chẩn đoán CAN</a><a href='/cau-hinh'>Kết nối</a></nav></header><section class='mode'><b>Chế độ Laser/Kho:</b><button id='p8'>8 GROUP</button><button id='p12'>12 GROUP</button><span id='summary' class='meta'></span></section><main id='grid' class='grid'></main></div>"
-"<dialog id='dlg'><h2 id='title'>Cấu hình Group</h2><form id='form'><label>Group<input id='group' readonly></label><label>LaserID cho phép<input id='range' readonly></label><label>LaserID<select id='laser'></select></label><label>Mã kho<input id='code' maxlength='15' required></label><label class='full'>Tên vị trí kho<input id='name' maxlength='31'></label><label>Distance (mm)<input id='distance' type='number' min='0' max='1200'></label><label>Distance_E (mm)<input id='emergency' type='number' min='0' max='1200'></label><label>Row mask<input id='row' type='number' min='0' max='255'></label><label>Column mask<input id='col' type='number' min='0' max='255'></label><label class='full'><span><input id='enabled' type='checkbox'> Bật vị trí và proximity</span></label><div id='runtime' class='meta full'></div><div id='err' class='err full'></div><div class='actions full'><button type='button' onclick='dlg.close()'>Hủy</button><button class='save'>Lưu cấu hình</button></div></form></dialog>"
-"<script>const $=x=>document.getElementById(x);let snap,nodes=[],editing=0;const esc=x=>String(x??'').replace(/[&<>\"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[c]));async function load(){snap=await(await fetch('/api/warehouse/status',{cache:'no-store'})).json();try{nodes=(await(await fetch('/api/debug/status',{cache:'no-store'})).json()).nodes||[]}catch(e){}render();setTimeout(load,1000)}function render(){$('p8').className=snap.profile==='GROUP_8'?'active':'';$('p12').className=snap.profile==='GROUP_12'?'active':'';$('summary').textContent=`${snap.online} online · ${snap.occupied} có hàng · ${snap.unknown} chưa xác định`;$('grid').innerHTML=snap.positions.map(p=>`<button class='card ${p.state}' onclick='openGroup(${p.group_id})'><strong>GROUP ${p.group_id}</strong><span>${esc(p.warehouse_code||'Chưa cấu hình')}</span><span class='state'>${p.state==='EMPTY'?'KHÔNG CÓ HÀNG':p.state==='OCCUPIED'?'CÓ HÀNG':'CHƯA XÁC ĐỊNH'}</span><span class='meta'>LaserID ${p.laser_id||'-'} · ${p.sensor_online?'ONLINE':'OFFLINE'}</span></button>`).join('')}function openGroup(g){editing=g;const p=snap.positions[g-1],a=p.allowed_first,b=p.allowed_last;$('group').value='GROUP '+g;$('range').value=`ID ${a}–${b}`;$('laser').innerHTML='<option value=0>Chưa gán</option>'+Array.from({length:b-a+1},(_,i)=>a+i).map(id=>{const n=nodes.find(x=>x.id===id),used=snap.positions.some(x=>x.group_id!==g&&x.laser_id===id);return `<option value=${id} ${used?'disabled':''}>ID ${id} · ${n&&n.alive?'ONLINE':'NOT DETECTED'}${used?' · Đã dùng':''}</option>`}).join('');$('laser').value=p.laser_id||0;$('code').value=p.warehouse_code||'';$('name').value=p.warehouse_name||'';$('distance').value=p.config_distance_mm||600;$('emergency').value=p.config_emergency_mm||300;$('row').value=p.high_row||0;$('col').value=p.low_col||0;$('enabled').checked=p.enabled;$('runtime').textContent=`Runtime: ${p.state} · Last seen: ${p.last_seen_ago_ms<0?'chưa có':p.last_seen_ago_ms+' ms'} · Warn: ${p.warn}`;$('err').textContent='';dlg.showModal()}async function profile(p){if(snap.profile===p)return;const clear=confirm('Đổi profile sẽ không tự remap. Nếu có mapping xung đột, hệ thống sẽ từ chối. Tiếp tục?');if(!clear)return;const r=await fetch('/api/warehouse/profile',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({profile:p,clear_conflicts:0})});if(!r.ok)alert('Mapping hiện tại xung đột. Hãy xóa/cấu hình lại trước khi đổi profile.');else load()}$('p8').onclick=()=>profile('GROUP_8');$('p12').onclick=()=>profile('GROUP_12');$('form').onsubmit=async e=>{e.preventDefault();let p={group_id:editing,laser_id:$('laser').value,warehouse_code:$('code').value,warehouse_name:$('name').value,distance_mm:$('distance').value,emergency_mm:$('emergency').value,low_col:$('col').value,high_row:$('row').value,enabled:$('enabled').checked?1:0};let r=await fetch('/api/warehouse/position',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(p)});if(!r.ok){$('err').textContent=await r.text();return}dlg.close();load()};load()</script></body></html>";
+"<!doctype html><html lang='vi'><head><meta charset='utf-8'>"
+"<meta name='viewport' content='width=device-width,initial-scale=1'>"
+"<title>Quản lý kho</title><style>"
+":root{font-family:Segoe UI,system-ui;color:#eef4ff;background:#07111f}"
+"*{box-sizing:border-box}body{margin:0;background:#07111f}.wrap{max-width:1120px;margin:auto;padding:20px}"
+"header{display:flex;justify-content:space-between;gap:12px;align-items:center}nav a{color:#bae6fd;margin-left:12px}"
+".mode,.card,dialog{background:#102037;border:1px solid #294563;border-radius:16px;color:#eef4ff}"
+".mode{padding:14px;margin:16px 0;display:flex;gap:10px;align-items:center;flex-wrap:wrap}"
+"button,input,select{font:inherit;min-height:44px;border-radius:9px;border:1px solid #3c5877;background:#091629;color:white;padding:0 12px}"
+"button{cursor:pointer}.active,.save{background:#0284c7;border-color:#38bdf8}"
+".grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.card{text-align:left;padding:16px;min-height:145px}"
+".card strong,.card span{display:block}.card .state{font-size:20px;margin:15px 0 5px}.EMPTY{border-color:#22c55e}"
+".OCCUPIED{border-color:#f59e0b}.UNKNOWN{border-color:#64748b}.meta{color:#9eb0c7;font-size:13px}"
+"dialog{width:min(580px,calc(100% - 24px));padding:20px}form{display:grid;grid-template-columns:1fr 1fr;gap:12px}"
+"label{display:grid;gap:6px;font-size:13px}.full{grid-column:1/-1}.actions{display:flex;justify-content:flex-end;gap:8px}"
+".err{color:#fca5a5;min-height:20px}@media(max-width:700px){.grid{grid-template-columns:repeat(2,1fr)}}"
+"@media(max-width:420px){.grid,form{grid-template-columns:1fr}.full{grid-column:auto}}</style></head><body>"
+"<div class='wrap'><header><div><small>AUBOT GATEWAY</small><h1>Giám sát vị trí kho</h1></div>"
+"<nav><a href='/debug'>Chẩn đoán CAN</a><a href='/cau-hinh'>Kết nối</a></nav></header>"
+"<section class='mode'><b>Chế độ Laser/Kho:</b><button id='p8'>8 GROUP</button><button id='p12'>12 GROUP</button>"
+"<span id='summary' class='meta'></span></section><main id='grid' class='grid'></main></div>"
+"<dialog id='dlg'><h2>Cấu hình Group</h2><form id='form'>"
+"<label>Group<input id='group' readonly></label><label>LaserID cho phép<input id='range' readonly></label>"
+"<label>LaserID<select id='laser'></select></label><label>Mã kho<input id='code' maxlength='15' required></label>"
+"<label class='full'>Tên vị trí kho<input id='name' maxlength='31'></label>"
+"<label>Distance (mm)<input id='distance' type='number' min='0' max='1200'></label>"
+"<label>Distance_E (mm)<input id='emergency' type='number' min='0' max='1200'></label>"
+"<label>Row mask<input id='row' type='number' min='0' max='255'></label>"
+"<label>Column mask<input id='col' type='number' min='0' max='255'></label>"
+"<label><span><input id='enabled' type='checkbox'> Bật vị trí kho</span></label>"
+"<label><span><input id='proximity' type='checkbox'> Bật proximity laser</span></label>"
+"<div id='runtime' class='meta full'></div><div id='err' class='err full'></div>"
+"<div class='actions full'><button type='button' onclick='dlg.close()'>Hủy</button><button class='save'>Lưu cấu hình</button></div>"
+"</form></dialog><script>"
+"const $=x=>document.getElementById(x);let snap,nodes=[],editing=0;"
+"const esc=x=>String(x??'').replace(/[&<>\"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[c]));"
+"async function load(){snap=await(await fetch('/api/warehouse/status',{cache:'no-store'})).json();"
+"try{nodes=(await(await fetch('/api/debug/status',{cache:'no-store'})).json()).nodes||[]}catch(e){}render();setTimeout(load,1000)}"
+"function render(){$('p8').className=snap.profile==='GROUP_8'?'active':'';$('p12').className=snap.profile==='GROUP_12'?'active':'';"
+"$('summary').textContent=`${snap.online} online · ${snap.occupied} có hàng · ${snap.unknown} chưa xác định`;"
+"$('grid').innerHTML=snap.positions.map(p=>`<button class='card ${p.state}' onclick='openGroup(${p.group_id})'>"
+"<strong>GROUP ${p.group_id}</strong><span>${esc(p.warehouse_code||'Chưa cấu hình')}</span>"
+"<span class='state'>${p.state==='EMPTY'?'KHÔNG CÓ HÀNG':p.state==='OCCUPIED'?'CÓ HÀNG':'CHƯA XÁC ĐỊNH'}</span>"
+"<span class='meta'>LaserID ${p.laser_id||'-'} · ${p.sensor_online?'ONLINE':'OFFLINE'}</span></button>`).join('')}"
+"function openGroup(g){editing=g;const p=snap.positions[g-1],a=p.allowed_first,b=p.allowed_last;"
+"$('group').value='GROUP '+g;$('range').value=`ID ${a}–${b}`;$('laser').innerHTML='<option value=0>Chưa gán</option>'+"
+"Array.from({length:b-a+1},(_,i)=>a+i).map(id=>{const n=nodes.find(x=>x.id===id),used=snap.positions.some(x=>x.group_id!==g&&x.laser_id===id);"
+"return `<option value=${id} ${used?'disabled':''}>ID ${id} · ${n&&n.alive?'ONLINE':'CHƯA PHÁT HIỆN'}${used?' · Đã dùng':''}</option>`}).join('');"
+"$('laser').value=p.laser_id||0;$('code').value=p.warehouse_code||'';$('name').value=p.warehouse_name||'';"
+"$('distance').value=p.config_distance_mm||600;$('emergency').value=p.config_emergency_mm||300;"
+"$('row').value=p.high_row||0;$('col').value=p.low_col||0;$('enabled').checked=p.enabled;"
+"$('proximity').checked=p.proximity_enabled;$('runtime').textContent=`Trạng thái: ${p.state} · Lần cuối: ${p.last_seen_ago_ms<0?'chưa có':p.last_seen_ago_ms+' ms'} · Cảnh báo: ${p.warn}`;"
+"$('err').textContent='';dlg.showModal()}"
+"async function profile(p){if(snap.profile===p)return;if(!confirm('Đổi profile sẽ không tự remap. Nếu có mapping xung đột, hệ thống sẽ từ chối. Tiếp tục?'))return;"
+"const r=await fetch('/api/warehouse/profile',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({profile:p,clear_conflicts:0})});"
+"if(!r.ok)alert('Mapping hiện tại xung đột. Hãy xóa/cấu hình lại trước khi đổi profile.');else load()}"
+"$('p8').onclick=()=>profile('GROUP_8');$('p12').onclick=()=>profile('GROUP_12');"
+"$('form').onsubmit=async e=>{e.preventDefault();const p={group_id:editing,laser_id:$('laser').value,warehouse_code:$('code').value,"
+"warehouse_name:$('name').value,distance_mm:$('distance').value,emergency_mm:$('emergency').value,low_col:$('col').value,"
+"high_row:$('row').value,enabled:$('enabled').checked?1:0,proximity:$('proximity').checked?1:0};"
+"const r=await fetch('/api/warehouse/position',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(p)});"
+"if(!r.ok){$('err').textContent=await r.text();return}dlg.close();load()};load()</script></body></html>";
 
-static esp_err_t page(httpd_req_t*r){httpd_resp_set_type(r,"text/html; charset=utf-8");return httpd_resp_send(r,PAGE,HTTPD_RESP_USE_STRLEN);}
-static esp_err_t status(httpd_req_t*r){warehouse_snapshot_t s;warehouse_manager_snapshot(&s);char b[512];int n=snprintf(b,sizeof(b),"{\"profile\":\"%s\",\"group_count\":%u,\"configured\":%u,\"online\":%u,\"unknown\":%u,\"empty\":%u,\"occupied\":%u,\"positions\":[",laser_profile_name(s.profile),s.group_count,s.configured,s.online,s.unknown,s.empty,s.occupied);httpd_resp_set_type(r,"application/json");httpd_resp_send_chunk(r,b,n);for(uint8_t i=0;i<s.group_count;i++){warehouse_position_t*p=&s.positions[i];laser_group_definition_t g;laser_profile_group_definition(s.profile,i+1,&g);n=snprintf(b,sizeof(b),"%s{\"group_id\":%u,\"enabled\":%s,\"laser_id\":%u,\"allowed_first\":%u,\"allowed_last\":%u,\"warehouse_code\":\"%s\",\"warehouse_name\":\"%s\",\"state\":\"%s\",\"sensor_online\":%s,\"last_seen_ago_ms\":%lld,\"warn\":\"%s\",\"config_distance_mm\":%u,\"config_emergency_mm\":%u,\"low_col\":%u,\"high_row\":%u}",i?",":"",i+1,p->config.enabled?"true":"false",p->config.laser_id,g.laser_id_first,g.laser_id_last,p->config.warehouse_code,p->config.warehouse_name,warehouse_state_name(p->state),p->sensor_online?"true":"false",p->last_seen_ago_ms,laser_can_obstacle_state_name(p->warn),p->config.distance_mm,p->config.distance_emergency_mm,p->config.low_col,p->config.high_row);httpd_resp_send_chunk(r,b,n);}httpd_resp_send_chunk(r,"]}",2);return httpd_resp_send_chunk(r,NULL,0);}
-static bool field(const char*b,const char*k,char*o,size_t n){return httpd_query_key_value(b,k,o,n)==ESP_OK;}
-static esp_err_t read_body(httpd_req_t*r,char*b,size_t n){if(!r->content_len||r->content_len>=n)return ESP_ERR_INVALID_SIZE;int x=httpd_req_recv(r,b,r->content_len);if(x!=(int)r->content_len)return ESP_FAIL;b[x]=0;return ESP_OK;}
-static esp_err_t set_profile(httpd_req_t*r){char b[128]={0},p[16]={0},c[4]={0};if(read_body(r,b,sizeof(b))!=ESP_OK||!field(b,"profile",p,sizeof(p)))return httpd_resp_send_err(r,400,"Dữ liệu không hợp lệ");laser_profile_t x=!strcmp(p,"GROUP_12")?LASER_PROFILE_GROUP_12:LASER_PROFILE_GROUP_8;field(b,"clear_conflicts",c,sizeof(c));esp_err_t e=warehouse_manager_set_profile(x,atoi(c)!=0);if(e!=ESP_OK)return httpd_resp_send_err(r,409,"Mapping hiện tại xung đột với profile mới");return httpd_resp_sendstr(r,"{\"ok\":true}");}
-static esp_err_t set_position(httpd_req_t*r)
+static esp_err_t page(httpd_req_t *request)
 {
-    char b[512]={0},x[64];
-    if(read_body(r,b,sizeof(b))!=ESP_OK)return httpd_resp_send_err(r,400,"Dữ liệu quá dài");
-    warehouse_position_config_t p={0};
-#define U(k,f) do{if(!field(b,k,x,sizeof(x)))return httpd_resp_send_err(r,400,"Thiếu trường " k);p.f=(typeof(p.f))strtoul(x,NULL,10);}while(0)
-    U("group_id",group_id);U("laser_id",laser_id);U("distance_mm",distance_mm);
-    U("emergency_mm",distance_emergency_mm);U("low_col",low_col);
-    U("high_row",high_row);U("enabled",enabled);
-#undef U
-    p.proximity_enabled=p.enabled;
-    if(field(b,"warehouse_code",x,sizeof(x)))strlcpy(p.warehouse_code,x,sizeof(p.warehouse_code));
-    if(field(b,"warehouse_name",x,sizeof(x)))strlcpy(p.warehouse_name,x,sizeof(p.warehouse_name));
-    warehouse_validation_t v=warehouse_manager_validate_position(&p);
-    if(v!=WAREHOUSE_VALID)return httpd_resp_send_err(r,409,warehouse_validation_name(v));
-    if(warehouse_manager_set_position(&p)!=ESP_OK)return httpd_resp_send_err(r,500,"Không thể lưu NVS");
-    if(p.enabled){laser_can_config_request_t q={.laser_id=p.laser_id,.distance_mm=p.distance_mm,.distance_emergency_mm=p.distance_emergency_mm,.low_col=p.low_col,.high_row=p.high_row,.proximity_enabled=p.proximity_enabled};(void)laser_can_bringup_configure(&q,NULL);}
-    return httpd_resp_sendstr(r,"{\"ok\":true}");
+    httpd_resp_set_type(request, "text/html; charset=utf-8");
+    return httpd_resp_send(request, PAGE, HTTPD_RESP_USE_STRLEN);
 }
-esp_err_t warehouse_http_register(httpd_handle_t s){const httpd_uri_t u[]={{.uri="/",.method=HTTP_GET,.handler=page},{.uri="/api/warehouse/status",.method=HTTP_GET,.handler=status},{.uri="/api/warehouse/profile",.method=HTTP_POST,.handler=set_profile},{.uri="/api/warehouse/position",.method=HTTP_POST,.handler=set_position}};for(size_t i=0;i<4;i++){esp_err_t e=httpd_register_uri_handler(s,&u[i]);if(e!=ESP_OK)return e;}return ESP_OK;}
+
+static size_t json_escape(char *output, size_t capacity, const char *input)
+{
+    size_t used = 0;
+    for (; *input != '\0' && used + 1U < capacity; ++input) {
+        const char *escape = NULL;
+        if (*input == '"') escape = "\\\"";
+        else if (*input == '\\') escape = "\\\\";
+        else if (*input == '\n') escape = "\\n";
+        else if (*input == '\r') escape = "\\r";
+        else if (*input == '\t') escape = "\\t";
+        if (escape != NULL) {
+            const size_t length = strlen(escape);
+            if (used + length >= capacity) break;
+            memcpy(output + used, escape, length);
+            used += length;
+        } else if ((unsigned char)*input >= 0x20U) {
+            output[used++] = *input;
+        }
+    }
+    output[used] = '\0';
+    return used;
+}
+
+static esp_err_t status(httpd_req_t *request)
+{
+    warehouse_snapshot_t snapshot;
+    warehouse_manager_snapshot(&snapshot);
+    char buffer[640];
+    int length = snprintf(buffer, sizeof(buffer),
+        "{\"profile\":\"%s\",\"group_count\":%u,\"configured\":%u,\"online\":%u,"
+        "\"unknown\":%u,\"empty\":%u,\"occupied\":%u,\"positions\":[",
+        laser_profile_name(snapshot.profile), snapshot.group_count, snapshot.configured,
+        snapshot.online, snapshot.unknown, snapshot.empty, snapshot.occupied);
+    httpd_resp_set_type(request, "application/json");
+    httpd_resp_send_chunk(request, buffer, length);
+
+    for (uint8_t i = 0; i < snapshot.group_count; ++i) {
+        warehouse_position_t *position = &snapshot.positions[i];
+        laser_group_definition_t group;
+        char code[WAREHOUSE_CODE_LEN * 2U];
+        char name[WAREHOUSE_NAME_LEN * 2U];
+        json_escape(code, sizeof(code), position->config.warehouse_code);
+        json_escape(name, sizeof(name), position->config.warehouse_name);
+        laser_profile_group_definition(snapshot.profile, i + 1U, &group);
+        length = snprintf(buffer, sizeof(buffer),
+            "%s{\"group_id\":%u,\"enabled\":%s,\"proximity_enabled\":%s,\"laser_id\":%u,"
+            "\"allowed_first\":%u,\"allowed_last\":%u,\"warehouse_code\":\"%s\",\"warehouse_name\":\"%s\","
+            "\"state\":\"%s\",\"sensor_online\":%s,\"last_seen_ago_ms\":%lld,\"warn\":\"%s\","
+            "\"config_distance_mm\":%u,\"config_emergency_mm\":%u,\"low_col\":%u,\"high_row\":%u}",
+            i ? "," : "", i + 1U, position->config.enabled ? "true" : "false",
+            position->config.proximity_enabled ? "true" : "false", position->config.laser_id,
+            group.laser_id_first, group.laser_id_last, code, name,
+            warehouse_state_name(position->state), position->sensor_online ? "true" : "false",
+            position->last_seen_ago_ms, laser_can_obstacle_state_name(position->warn),
+            position->config.distance_mm, position->config.distance_emergency_mm,
+            position->config.low_col, position->config.high_row);
+        httpd_resp_send_chunk(request, buffer, length);
+    }
+    httpd_resp_send_chunk(request, "]}", 2);
+    return httpd_resp_send_chunk(request, NULL, 0);
+}
+
+static bool field(const char *body, const char *key, char *output, size_t capacity)
+{
+    return httpd_query_key_value(body, key, output, capacity) == ESP_OK;
+}
+
+static esp_err_t read_body(httpd_req_t *request, char *buffer, size_t capacity)
+{
+    if (request->content_len == 0U || request->content_len >= capacity) return ESP_ERR_INVALID_SIZE;
+    const int received = httpd_req_recv(request, buffer, request->content_len);
+    if (received != (int)request->content_len) return ESP_FAIL;
+    buffer[received] = '\0';
+    return ESP_OK;
+}
+
+static esp_err_t send_conflict(httpd_req_t *request, const char *message)
+{
+    httpd_resp_set_status(request, "409 Conflict");
+    httpd_resp_set_type(request, "text/plain; charset=utf-8");
+    return httpd_resp_sendstr(request, message);
+}
+
+static esp_err_t set_profile(httpd_req_t *request)
+{
+    char body[128] = {0}, profile_name[16] = {0}, clear[4] = {0};
+    if (read_body(request, body, sizeof(body)) != ESP_OK ||
+        !field(body, "profile", profile_name, sizeof(profile_name))) {
+        return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Dữ liệu không hợp lệ");
+    }
+    const laser_profile_t profile = strcmp(profile_name, "GROUP_12") == 0
+        ? LASER_PROFILE_GROUP_12 : LASER_PROFILE_GROUP_8;
+    field(body, "clear_conflicts", clear, sizeof(clear));
+    if (warehouse_manager_set_profile(profile, atoi(clear) != 0) != ESP_OK) {
+        return send_conflict(request, "Mapping hiện tại xung đột với profile mới");
+    }
+    return httpd_resp_sendstr(request, "{\"ok\":true}");
+}
+
+static esp_err_t set_position(httpd_req_t *request)
+{
+    char body[512] = {0}, value[64];
+    if (read_body(request, body, sizeof(body)) != ESP_OK) {
+        return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Dữ liệu quá dài");
+    }
+    warehouse_position_config_t position = {0};
+#define READ_UINT(key, member) do { \
+    if (!field(body, key, value, sizeof(value))) \
+        return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Thiếu trường " key); \
+    position.member = (typeof(position.member))strtoul(value, NULL, 10); \
+} while (0)
+    READ_UINT("group_id", group_id);
+    READ_UINT("laser_id", laser_id);
+    READ_UINT("distance_mm", distance_mm);
+    READ_UINT("emergency_mm", distance_emergency_mm);
+    READ_UINT("low_col", low_col);
+    READ_UINT("high_row", high_row);
+    READ_UINT("enabled", enabled);
+    READ_UINT("proximity", proximity_enabled);
+#undef READ_UINT
+    if (field(body, "warehouse_code", value, sizeof(value)))
+        strlcpy(position.warehouse_code, value, sizeof(position.warehouse_code));
+    if (field(body, "warehouse_name", value, sizeof(value)))
+        strlcpy(position.warehouse_name, value, sizeof(position.warehouse_name));
+
+    const warehouse_validation_t validation = warehouse_manager_validate_position(&position);
+    if (validation != WAREHOUSE_VALID) {
+        return send_conflict(request, warehouse_validation_name(validation));
+    }
+    if (warehouse_manager_set_position(&position) != ESP_OK) {
+        return httpd_resp_send_err(request, HTTPD_500_INTERNAL_SERVER_ERROR,
+                                   "Không thể lưu NVS");
+    }
+    if (position.enabled) {
+        const laser_can_config_request_t config = {
+            .laser_id = position.laser_id,
+            .distance_mm = position.distance_mm,
+            .distance_emergency_mm = position.distance_emergency_mm,
+            .low_col = position.low_col,
+            .high_row = position.high_row,
+            .proximity_enabled = position.proximity_enabled,
+        };
+        (void)laser_can_bringup_configure(&config, NULL);
+    }
+    return httpd_resp_sendstr(request, "{\"ok\":true}");
+}
+
+esp_err_t warehouse_http_register(httpd_handle_t server)
+{
+    const httpd_uri_t handlers[] = {
+        {.uri = "/", .method = HTTP_GET, .handler = page},
+        {.uri = "/api/warehouse/status", .method = HTTP_GET, .handler = status},
+        {.uri = "/api/warehouse/profile", .method = HTTP_POST, .handler = set_profile},
+        {.uri = "/api/warehouse/position", .method = HTTP_POST, .handler = set_position},
+    };
+    for (size_t i = 0; i < sizeof(handlers) / sizeof(handlers[0]); ++i) {
+        const esp_err_t error = httpd_register_uri_handler(server, &handlers[i]);
+        if (error != ESP_OK) return error;
+    }
+    return ESP_OK;
+}
