@@ -5,12 +5,16 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "esp_timer.h"
 #include "platform_wifi.h"
 
 static const char *TAG = "GW_NET";
 static gateway_config_t s_config;
 static bool s_started;
 static char s_active[33];
+static bool s_ap_manual;
+static int64_t s_ap_started_ms;
+#define COMMISSIONING_AP_TIMEOUT_MS 300000LL
 
 static void connect_best(void)
 {
@@ -50,9 +54,19 @@ static void network_task(void *arg)
 {
     (void)arg;
     vTaskDelay(pdMS_TO_TICKS(800));
+    int64_t next_sta_attempt_ms = 0;
     for (;;) {
-        if (!platform_wifi_sta_is_connected()) connect_best();
-        vTaskDelay(pdMS_TO_TICKS(platform_wifi_sta_is_connected() ? 30000 : 10000));
+        const int64_t now_ms = esp_timer_get_time() / 1000LL;
+        if (!platform_wifi_sta_is_connected() && now_ms >= next_sta_attempt_ms) {
+            connect_best();
+            next_sta_attempt_ms = now_ms + 10000LL;
+        }
+        if (!s_ap_manual && platform_wifi_ap_is_active() &&
+            now_ms - s_ap_started_ms >= COMMISSIONING_AP_TIMEOUT_MS) {
+            (void)platform_wifi_ap_stop();
+            ESP_LOGI(TAG, "AP commissioning auto off after 5 minutes");
+        }
+        vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
 
@@ -68,6 +82,8 @@ esp_err_t gateway_network_start(const gateway_config_t *config)
     esp_err_t e = platform_wifi_start_apsta(&sta, &ap, NULL, NULL);
     if (e != ESP_OK) return e;
     s_started = true;
+    s_ap_manual = false;
+    s_ap_started_ms = esp_timer_get_time() / 1000LL;
     if (xTaskCreate(network_task, "gw_network", 4096, NULL, 5, NULL) != pdPASS) return ESP_ERR_NO_MEM;
     return ESP_OK;
 }
@@ -88,5 +104,16 @@ esp_err_t gateway_network_apply(const gateway_config_t *config)
     return bsp_eth_apply_network_config(&eth);
 }
 
-bool gateway_network_is_connected(void) { return platform_wifi_sta_is_connected() || bsp_eth_is_connected(); }
+bool gateway_network_wifi_available(void) { return platform_wifi_sta_is_connected(); }
+bool gateway_network_eth_uplink_available(void) { return s_config.eth_router_mode && bsp_eth_is_connected(); }
+bool gateway_network_eth_debug_active(void) { return !s_config.eth_router_mode && bsp_eth_link_is_up(); }
+bool gateway_network_production_available(void) { return gateway_network_wifi_available() || gateway_network_eth_uplink_available(); }
+bool gateway_network_is_connected(void) { return gateway_network_production_available(); }
+esp_err_t gateway_network_set_ap(bool enabled)
+{
+    if (!s_started) return ESP_ERR_INVALID_STATE;
+    s_ap_manual = true;
+    return enabled ? platform_wifi_ap_start() : platform_wifi_ap_stop();
+}
+bool gateway_network_ap_is_manual(void) { return s_ap_manual; }
 const char *gateway_network_active_name(void) { return s_active; }
