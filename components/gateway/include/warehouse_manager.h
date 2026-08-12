@@ -71,6 +71,9 @@ warehouse_validation_t warehouse_manager_validate_profile(laser_profile_t profil
 esp_err_t warehouse_manager_set_profile(laser_profile_t profile, bool clear_conflicts);
 warehouse_validation_t warehouse_manager_validate_position(
     const warehouse_position_config_t *position);
+warehouse_validation_t warehouse_manager_validate_candidate(
+    laser_profile_t profile, const warehouse_position_config_t *positions,
+    size_t position_count, const warehouse_position_config_t *candidate);
 esp_err_t warehouse_manager_set_position(const warehouse_position_config_t *position);
 bool warehouse_manager_get_position(uint8_t group_id, warehouse_position_t *position);
 void warehouse_manager_snapshot(warehouse_snapshot_t *snapshot);
@@ -78,4 +81,3 @@ warehouse_state_t warehouse_state_from_sensor(bool online, bool status_valid,
                                                laser_obstacle_state_t warn);
 const char *warehouse_state_name(warehouse_state_t state);
 const char *warehouse_validation_name(warehouse_validation_t result);
-

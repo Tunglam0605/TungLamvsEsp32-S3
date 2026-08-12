@@ -118,23 +118,32 @@ esp_err_t warehouse_manager_set_profile(laser_profile_t profile,bool clear_confl
     return err;
 }
 
-warehouse_validation_t warehouse_manager_validate_position(const warehouse_position_config_t *p)
+warehouse_validation_t warehouse_manager_validate_candidate(
+    laser_profile_t profile, const warehouse_position_config_t *positions,
+    size_t position_count, const warehouse_position_config_t *p)
 {
-    if (!p) return WAREHOUSE_INVALID_GROUP;
-    laser_profile_t profile;
-    warehouse_position_config_t positions[WAREHOUSE_POSITION_MAX];
-    taskENTER_CRITICAL(&s_mux);
-    profile = s_profile;
-    memcpy(positions, s_positions, sizeof(positions));
-    taskEXIT_CRITICAL(&s_mux);
+    if (!p || (positions == NULL && position_count != 0U)) return WAREHOUSE_INVALID_GROUP;
     const uint8_t group_count = laser_profile_group_count(profile);
     if(p->group_id==0||p->group_id>group_count)return WAREHOUSE_INVALID_GROUP;
     if(!p->enabled)return WAREHOUSE_VALID;
     if(!laser_profile_id_allowed(profile,p->group_id,p->laser_id))return WAREHOUSE_INVALID_LASER_ID;
     if(p->distance_mm>DISTANCE_MAX_MM||p->distance_emergency_mm>p->distance_mm)return WAREHOUSE_INVALID_DISTANCE;
     if(!valid_text(p->warehouse_code,sizeof(p->warehouse_code),false)||!valid_text(p->warehouse_name,sizeof(p->warehouse_name),true))return WAREHOUSE_INVALID_TEXT;
-    for(uint8_t i=0;i<group_count;i++){const warehouse_position_config_t *x=&positions[i];if(!x->enabled||x->group_id==p->group_id)continue;if(x->laser_id==p->laser_id)return WAREHOUSE_DUPLICATE_LASER_ID;if(strcmp(x->warehouse_code,p->warehouse_code)==0)return WAREHOUSE_DUPLICATE_CODE;}
+    if (position_count > group_count) position_count = group_count;
+    for(size_t i=0;i<position_count;i++){const warehouse_position_config_t *x=&positions[i];if(!x->enabled||x->group_id==p->group_id)continue;if(x->laser_id==p->laser_id)return WAREHOUSE_DUPLICATE_LASER_ID;if(strcmp(x->warehouse_code,p->warehouse_code)==0)return WAREHOUSE_DUPLICATE_CODE;}
     return WAREHOUSE_VALID;
+}
+
+warehouse_validation_t warehouse_manager_validate_position(const warehouse_position_config_t *p)
+{
+    laser_profile_t profile;
+    warehouse_position_config_t positions[WAREHOUSE_POSITION_MAX];
+    taskENTER_CRITICAL(&s_mux);
+    profile = s_profile;
+    memcpy(positions, s_positions, sizeof(positions));
+    taskEXIT_CRITICAL(&s_mux);
+    return warehouse_manager_validate_candidate(profile, positions,
+                                                 WAREHOUSE_POSITION_MAX, p);
 }
 
 esp_err_t warehouse_manager_set_position(const warehouse_position_config_t *p)
