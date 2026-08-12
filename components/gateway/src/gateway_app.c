@@ -15,9 +15,18 @@
 #include "gateway_app.h"
 
 #include "bsp_can.h"
+#include "bsp_board.h"
 #include "bsp_eth.h"
+#include "debug_http_server.h"
 #include "esp_log.h"
+#include "gateway_config.h"
+#include "gateway_mqtt.h"
+#include "gateway_network.h"
+#include "gateway_status.h"
+#include "laser_can_bringup.h"
 #include "platform_wifi.h"
+#include "platform_time.h"
+#include "warehouse_manager.h"
 
 static const char *TAG = "GATEWAY";
 
@@ -28,45 +37,55 @@ static const char *TAG = "GATEWAY";
  *   ky thuat vien khong phai doan dia chi moi khi chua co ha tang LAN.
  * - Day la product configuration cua Gateway, khong nam trong platform_wifi.
  */
-static const platform_wifi_sta_network_config_t s_sta_network = {
-    .dhcp = true,
-};
-
-static const platform_wifi_ap_config_t s_ap_config = {
-    .ssid = "AUBOT-GATEWAY",
-    .password = "gateway123",
-    .ip = "192.168.65.204",
-    .netmask = "255.255.255.0",
-    .channel = 1,
-    .max_clients = 4,
-};
-
 esp_err_t gateway_app_run(void)
 {
+    esp_err_t err = gateway_config_init();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Cannot load Gateway configuration: %s", esp_err_to_name(err));
+        return err;
+    }
+    gateway_config_t config;
+    gateway_config_get(&config);
+
+    err = bsp_board_init();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Cannot initialize board I/O and buzzer: %s", esp_err_to_name(err));
+        return err;
+    }
+
     /* APSTA khong phu thuoc Ethernet hay CAN: khi LAN/CAN chua cam, ky thuat
      * vien van co the vao AP de phuc vu commissioning va debug sau nay. */
-    esp_err_t err = platform_wifi_start_apsta(&s_sta_network, &s_ap_config,
-                                              NULL, NULL);
+    err = gateway_network_start(&config);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Cannot start Wi-Fi APSTA: %s", esp_err_to_name(err));
         return err;
     }
 
-    err = platform_wifi_sta_set_credentials("Robotics AUBOT 1", "123456789");
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Cannot set Gateway STA credentials: %s", esp_err_to_name(err));
-        return err;
-    }
-    err = platform_wifi_sta_connect();
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Gateway STA connect pending/failed: %s", esp_err_to_name(err));
-    }
-
     /* W5500 tu lay DHCP va bao trang thai qua bsp_eth_is_connected().
      * Khong coi viec chua cam day la loi khoi dong Gateway. */
-    err = bsp_eth_init();
+    const bsp_eth_network_config_t eth_network = config.eth_router_mode
+        ? (bsp_eth_network_config_t) {
+            .dhcp = config.eth_dhcp, .ip = config.eth_ip,
+            .netmask = config.eth_netmask, .gateway = config.eth_gateway,
+            .dns = config.eth_dns,
+        }
+        : (bsp_eth_network_config_t) {
+            .dhcp = false, .ip = "169.254.1.1",
+            .netmask = "255.255.0.0", .gateway = "0.0.0.0", .dns = NULL,
+        };
+    err = bsp_eth_init_with_config(&eth_network);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "Ethernet W5500 unavailable: %s", esp_err_to_name(err));
+    }
+
+    const platform_time_config_t time_config = {
+        .primary_server = "pool.ntp.org",
+        .fallback_server = "time.google.com",
+        .timezone = "ICT-7",
+    };
+    err = platform_time_init(&time_config);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Cannot start SNTP service: %s", esp_err_to_name(err));
     }
 
     /* CAN la kenh giao tiep chinh cua Gateway voi thiet bi hien truong. */
@@ -76,6 +95,38 @@ esp_err_t gateway_app_run(void)
         return err;
     }
 
-    ESP_LOGI(TAG, "Gateway ready: APSTA + Ethernet + CAN initialized");
+    /* Chỉ start discovery thụ động: chưa chọn profile B300/MainV2 nên không
+     * gửi config hoặc lệnh proximity có thể tác động đến sensor đang vận hành. */
+    err = laser_can_bringup_start();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Cannot start laser CAN bring-up: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    err = warehouse_manager_init();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Cannot initialize warehouse mappings: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    err = gateway_mqtt_start();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Cannot start MQTT publisher: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    err = debug_http_server_start();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Cannot start Ethernet debug dashboard: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    err = gateway_status_start();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Cannot start network/AP buzzer policy: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    ESP_LOGI(TAG, "Gateway ready: APSTA + Ethernet + CAN laser bring-up initialized");
     return err;
 }

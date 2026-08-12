@@ -1,3 +1,14 @@
 idf_component_register(SRCS "src/gateway_app.c"
+                            "src/debug_http_server.c"
+                            "src/laser_can_bringup.c"
+                            "src/warehouse_manager.c"
+                            "src/warehouse_http.c"
+                            "src/gateway_config.c"
+                            "src/gateway_network.c"
+                            "src/gateway_mqtt.c"
+                            "src/gateway_config_http.c"
+                            "src/gateway_status.c"
+                            "src/gateway_config_page.c"
                        INCLUDE_DIRS "include"
-                       REQUIRES bsp platform_wifi)
+                       REQUIRES bsp platform_wifi platform_nvs platform_time esp_http_server esp_timer mqtt mbedtls)
+target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-error=trigraphs)
