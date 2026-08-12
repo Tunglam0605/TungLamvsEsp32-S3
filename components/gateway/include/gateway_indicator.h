@@ -11,4 +11,3 @@ typedef struct {
 } gateway_indicator_config_t;
 
 esp_err_t gateway_indicator_start(const gateway_indicator_config_t *config);
-

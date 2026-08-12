@@ -26,4 +26,3 @@ Manual verification matrix:
 | ETH debug has IP | production network remains false |
 | ETH uplink has IP | production network true |
 | MQTT reconnect | immediate current snapshot requested |
-
