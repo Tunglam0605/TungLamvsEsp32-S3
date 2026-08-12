@@ -107,7 +107,16 @@ esp_err_t gateway_network_apply(const gateway_config_t *config)
 bool gateway_network_wifi_available(void) { return platform_wifi_sta_is_connected(); }
 bool gateway_network_eth_uplink_available(void) { return s_config.eth_router_mode && bsp_eth_is_connected(); }
 bool gateway_network_eth_debug_active(void) { return !s_config.eth_router_mode && bsp_eth_link_is_up(); }
-bool gateway_network_production_available(void) { return gateway_network_wifi_available() || gateway_network_eth_uplink_available(); }
+bool gateway_network_production_state(bool wifi_available, bool eth_has_ip, bool eth_uplink_mode)
+{
+    return wifi_available || (eth_uplink_mode && eth_has_ip);
+}
+bool gateway_network_production_available(void)
+{
+    return gateway_network_production_state(platform_wifi_sta_is_connected(),
+                                            bsp_eth_is_connected(),
+                                            s_config.eth_router_mode);
+}
 bool gateway_network_is_connected(void) { return gateway_network_production_available(); }
 esp_err_t gateway_network_set_ap(bool enabled)
 {

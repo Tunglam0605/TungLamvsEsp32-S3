@@ -10,6 +10,8 @@ bool gateway_network_production_available(void);
 bool gateway_network_wifi_available(void);
 bool gateway_network_eth_uplink_available(void);
 bool gateway_network_eth_debug_active(void);
+bool gateway_network_production_state(bool wifi_available, bool eth_has_ip,
+                                      bool eth_uplink_mode);
 esp_err_t gateway_network_set_ap(bool enabled);
 bool gateway_network_ap_is_manual(void);
 const char *gateway_network_active_name(void);
