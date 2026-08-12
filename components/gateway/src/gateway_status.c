@@ -38,10 +38,23 @@ esp_err_t gateway_diagnostic_report(gateway_diagnostic_event_t event)
 {if(!s_queue||event>=GATEWAY_DIAG_EVENT_COUNT)return ESP_ERR_INVALID_STATE;return xQueueSend(s_queue,&event,0)==pdTRUE?ESP_OK:ESP_ERR_NO_MEM;}
 static void buzzer_task(void*a){(void)a;gateway_diagnostic_event_t e;for(;;){if(xQueueReceive(s_queue,&e,portMAX_DELAY)!=pdTRUE)continue;const beep_code_t*c=&CODES[e];for(uint8_t i=0;i<c->count;i++){(void)bsp_buzzer_set(c->steps[i].hz,45);vTaskDelay(pdMS_TO_TICKS(c->steps[i].on_ms));(void)bsp_buzzer_off();if(c->steps[i].off_ms)vTaskDelay(pdMS_TO_TICKS(c->steps[i].off_ms));}}}
 static void report_transition(bool current,bool*previous,gateway_diagnostic_event_t up,gateway_diagnostic_event_t down){if(current!=*previous){(void)gateway_diagnostic_report(current?up:down);*previous=current;}}
+
+static bool laser_config_mismatch_present(void)
+{
+    laser_can_node_status_t node;
+    for (uint8_t laser_id = LASER_ID_MIN; laser_id <= LASER_ID_MAX; ++laser_id) {
+        if (laser_can_bringup_get_node(laser_id, &node) &&
+            node.config_state == LASER_CONFIG_MISMATCH) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void status_task(void*a)
 {
  (void)a;bool init=false,network=false,mqtt=false,ap=false,can_ok=true,laser_ok=false,mismatch=false;
- for(;;){bsp_can_status_t cs={0};bsp_can_get_status(&cs);warehouse_snapshot_t ws;warehouse_manager_snapshot(&ws);bool n=gateway_network_production_available(),m=gateway_mqtt_is_connected(),p=platform_wifi_ap_is_active(),c=cs.state!=BSP_CAN_STATE_BUS_OFF,l=ws.configured==0||ws.online==ws.configured,mm=false;laser_can_node_status_t nodes[LASER_CAN_MAX_NODES];size_t count=laser_can_bringup_get_nodes(nodes,LASER_CAN_MAX_NODES);for(size_t i=0;i<count;i++)if(nodes[i].config_state==LASER_CONFIG_MISMATCH)mm=true;
+ for(;;){bsp_can_status_t cs={0};bsp_can_get_status(&cs);warehouse_snapshot_t ws;warehouse_manager_snapshot(&ws);bool n=gateway_network_production_available(),m=gateway_mqtt_is_connected(),p=platform_wifi_ap_is_active(),c=cs.state!=BSP_CAN_STATE_BUS_OFF,l=ws.configured==0||ws.online==ws.configured,mm=laser_config_mismatch_present();
  if(!init){network=n;mqtt=m;ap=false;can_ok=c;laser_ok=l;mismatch=false;init=true;}
  report_transition(n,&network,GATEWAY_DIAG_NETWORK_UP,GATEWAY_DIAG_NETWORK_DOWN);report_transition(m,&mqtt,GATEWAY_DIAG_MQTT_UP,GATEWAY_DIAG_MQTT_DOWN);report_transition(p,&ap,GATEWAY_DIAG_AP_ON,GATEWAY_DIAG_AP_OFF);report_transition(c,&can_ok,GATEWAY_DIAG_CAN_RECOVERED,GATEWAY_DIAG_CAN_BUS_OFF);report_transition(l,&laser_ok,GATEWAY_DIAG_LASER_RECOVERED,GATEWAY_DIAG_LASER_OFFLINE);if(mm&&!mismatch)(void)gateway_diagnostic_report(GATEWAY_DIAG_CONFIG_MISMATCH);mismatch=mm;vTaskDelay(pdMS_TO_TICKS(500));
  }
