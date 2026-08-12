@@ -9,6 +9,7 @@ idf_component_register(SRCS "src/gateway_app.c"
                             "src/gateway_mqtt.c"
                             "src/gateway_config_http.c"
                             "src/gateway_status.c"
+                            "src/gateway_indicator.c"
                             "src/gateway_config_page.c"
                        INCLUDE_DIRS "include"
                        REQUIRES bsp platform_wifi platform_nvs platform_time esp_http_server esp_timer mqtt mbedtls)
