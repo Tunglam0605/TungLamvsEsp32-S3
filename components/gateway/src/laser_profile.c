@@ -2,9 +2,12 @@
 
 #include <stddef.h>
 
-#define GROUP_8(id, first, last) \
-    { (id), (first), (last), (uint16_t)(99U + (id)), (uint16_t)(109U + (id)) }
-#define GROUP_12(id, first, last) { (id), (first), (last), 0U, 0U }
+#define GROUP_WITH_EVENTS(id, first, last, emergency_base, normal_base) \
+    { (id), (first), (last), \
+      (uint16_t)((emergency_base) + (id) - 1U), \
+      (uint16_t)((normal_base) + (id) - 1U) }
+#define GROUP_8(id, first, last) GROUP_WITH_EVENTS(id, first, last, 100U, 110U)
+#define GROUP_12(id, first, last) GROUP_WITH_EVENTS(id, first, last, 90U, 105U)
 
 static const laser_group_definition_t GROUPS_8[] = {
     GROUP_8(1, 1, 10), GROUP_8(2, 11, 20), GROUP_8(3, 21, 30), GROUP_8(4, 31, 40),
@@ -12,16 +15,14 @@ static const laser_group_definition_t GROUPS_8[] = {
 };
 
 static const laser_group_definition_t GROUPS_12[] = {
-    /* Obstacle CAN IDs for 12-group firmware are not frozen in this repository.
-     * Do not extend the old 100/110 bases: IDs 110..111 would be ambiguous. */
     GROUP_12(1, 1, 10), GROUP_12(2, 11, 20), GROUP_12(3, 21, 30), GROUP_12(4, 31, 40),
     GROUP_12(5, 41, 43), GROUP_12(6, 44, 46), GROUP_12(7, 47, 49), GROUP_12(8, 50, 52),
     GROUP_12(9, 53, 55), GROUP_12(10, 56, 58), GROUP_12(11, 59, 61), GROUP_12(12, 62, 64),
 };
 
 static const laser_profile_definition_t PROFILES[] = {
-    { LASER_PROFILE_GROUP_8, 8U, GROUPS_8 },
-    { LASER_PROFILE_GROUP_12, 12U, GROUPS_12 },
+    { LASER_PROFILE_GROUP_8, 8U, 100U, 110U, GROUPS_8 },
+    { LASER_PROFILE_GROUP_12, 12U, 90U, 105U, GROUPS_12 },
 };
 
 const laser_profile_definition_t *laser_profile_definition(laser_profile_t profile)

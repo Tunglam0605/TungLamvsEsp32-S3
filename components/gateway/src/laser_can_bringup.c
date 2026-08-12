@@ -250,14 +250,14 @@ static bool handle_obstacle_event(const bsp_can_frame_t *frame)
         s_group_obstacle[group].last_emergency_ms = now_ms;
         ++s_group_obstacle[group].emergency_event_count;
         taskEXIT_CRITICAL(&s_status_mux);
-        ESP_LOGW(TAG, "OBSTACLE EMERGENCY: B300 group=%u id=0x%03X", group, frame->id);
+        ESP_LOGW(TAG, "OBSTACLE EMERGENCY: B300 group=%u id=0x%03X", group_id, frame->id);
         return true;
     } else {
         taskENTER_CRITICAL(&s_status_mux);
         s_group_obstacle[group].last_normal_ms = now_ms;
         ++s_group_obstacle[group].normal_event_count;
         taskEXIT_CRITICAL(&s_status_mux);
-        ESP_LOGI(TAG, "OBSTACLE NORMAL: B300 group=%u id=0x%03X", group, frame->id);
+        ESP_LOGI(TAG, "OBSTACLE NORMAL: B300 group=%u id=0x%03X", group_id, frame->id);
         return true;
     }
 }

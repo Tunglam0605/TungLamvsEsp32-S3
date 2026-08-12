@@ -23,6 +23,8 @@ typedef struct {
 typedef struct {
     laser_profile_t profile;
     uint8_t group_count;
+    uint16_t emergency_event_base;
+    uint16_t normal_event_base;
     const laser_group_definition_t *groups;
 } laser_profile_definition_t;
 
@@ -40,4 +42,3 @@ bool laser_profile_group_for_obstacle_can_id(laser_profile_t profile,
                                               uint8_t *group_id,
                                               bool *emergency);
 const char *laser_profile_name(laser_profile_t profile);
-
