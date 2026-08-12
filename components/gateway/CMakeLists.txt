@@ -1,6 +1,7 @@
 idf_component_register(SRCS "src/gateway_app.c"
                             "src/debug_http_server.c"
                             "src/laser_can_bringup.c"
+                            "src/laser_profile.c"
                             "src/warehouse_manager.c"
                             "src/warehouse_http.c"
                             "src/gateway_config.c"
