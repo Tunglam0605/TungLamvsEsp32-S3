@@ -50,12 +50,15 @@ static void status_task(void *argument)
         const bool next_network = gateway_network_production_available();
         const bool next_mqtt = gateway_mqtt_is_connected();
         const bool next_ap = platform_wifi_ap_is_active();
-        const bool next_can = can.state != BSP_CAN_STATE_BUS_OFF;
+        const bool next_can = can.state != BSP_CAN_STATE_BUS_OFF &&
+                              can.state != BSP_CAN_STATE_STOPPED;
+        const bool next_can_healthy = can.state == BSP_CAN_STATE_ACTIVE;
         const bool next_laser = warehouse.configured == 0 ||
                                 warehouse.online == warehouse.configured;
         const bool next_mismatch = laser_config_mismatch_present();
 
-        gateway_output_set_health(next_network, next_mqtt, next_ap);
+        gateway_output_set_health(next_network, next_mqtt, next_ap, next_can,
+                                  next_can_healthy, next_laser, !next_mismatch);
         if (!initialized) {
             network = next_network;
             mqtt = next_mqtt;

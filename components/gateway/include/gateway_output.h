@@ -13,10 +13,16 @@ typedef struct {
     bool ap_active;
     bool production_network;
     bool mqtt_connected;
+    bool can_online;
+    bool can_healthy;
+    bool lasers_online;
+    bool laser_config_ok;
 } gateway_output_snapshot_t;
 
 esp_err_t gateway_output_start(void);
 void gateway_output_set_health(bool production_network, bool mqtt_connected,
-                               bool ap_active);
+                               bool ap_active, bool can_online,
+                               bool can_healthy, bool lasers_online,
+                               bool laser_config_ok);
 esp_err_t gateway_output_report(gateway_diagnostic_event_t event);
 void gateway_output_snapshot(gateway_output_snapshot_t *snapshot);
