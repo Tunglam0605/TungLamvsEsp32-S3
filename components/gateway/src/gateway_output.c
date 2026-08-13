@@ -57,6 +57,7 @@ static QueueHandle_t s_events;
 static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
 static bool s_network;
 static bool s_mqtt;
+static bool s_ap_active;
 static gateway_output_snapshot_t s_snapshot;
 
 static uint32_t now_ms(void)
@@ -84,6 +85,7 @@ static void commit_output(uint8_t desired, uint8_t *rendered)
         .tower_red = (desired & bit(io->tower_red)) != 0,
         .tower_yellow = (desired & bit(io->tower_yellow)) != 0,
         .tower_green = (desired & bit(io->tower_green)) != 0,
+        .ap_active = (desired & bit(io->ap_status)) != 0,
     };
     taskENTER_CRITICAL(&s_lock);
     snapshot.production_network = s_network;
@@ -123,10 +125,11 @@ static void output_task(void *argument)
             } else pattern = NULL;
         }
 
-        bool network, mqtt;
+        bool network, mqtt, ap_active;
         taskENTER_CRITICAL(&s_lock);
         network = s_network;
         mqtt = s_mqtt;
+        ap_active = s_ap_active;
         taskEXIT_CRITICAL(&s_lock);
         const bool blinking = !network || !mqtt;
         if (blinking && (int32_t)(now - tower_deadline) >= 0) {
@@ -141,7 +144,8 @@ static void output_task(void *argument)
             desired |= bit(io->tower_green);
             if (!mqtt && tower_phase) desired |= bit(io->tower_yellow);
         }
-        /* Only DO1..DO4 can ever be set; DO5..DO8 stay reserved/OFF. */
+        /* DO8 is the solid local configuration-AP LED, same policy as Callbox. */
+        if (ap_active) desired |= bit(io->ap_status);
         commit_output(desired, &rendered);
         /* DO1 drives the tower buzzer and GPIO46 drives the onboard buzzer.
          * Both are rendered from the same state machine so every pulse starts
@@ -172,15 +176,17 @@ esp_err_t gateway_output_start(void)
         (void)bsp_do_all_off();
         return ESP_ERR_NO_MEM;
     }
-    ESP_LOGI(TAG, "Single output owner ready: DO1 + onboard buzzer synchronized, DO2 red, DO3 yellow, DO4 green");
+    ESP_LOGI(TAG, "Single output owner ready: DO1 + onboard buzzer synchronized, DO2 red, DO3 yellow, DO4 green, DO8 AP");
     return ESP_OK;
 }
 
-void gateway_output_set_health(bool production_network, bool mqtt_connected)
+void gateway_output_set_health(bool production_network, bool mqtt_connected,
+                               bool ap_active)
 {
     taskENTER_CRITICAL(&s_lock);
     s_network = production_network;
     s_mqtt = mqtt_connected;
+    s_ap_active = ap_active;
     taskEXIT_CRITICAL(&s_lock);
 }
 

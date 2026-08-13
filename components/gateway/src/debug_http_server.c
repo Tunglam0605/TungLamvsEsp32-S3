@@ -253,14 +253,15 @@ static esp_err_t tech_summary_handler(httpd_req_t *req)
         "\"rx_frames\":%" PRIu32 ",\"tx_fail\":%" PRIu32 ","
         "\"rx_rejected\":%" PRIu32 ",\"rx_dropped\":%" PRIu32 ","
         "\"bus_errors\":%" PRIu32 ",\"network\":%s,\"mqtt\":%s,"
-        "\"output\":{\"buzzer\":%s,\"red\":%s,\"yellow\":%s,\"green\":%s}}",
+        "\"output\":{\"buzzer\":%s,\"red\":%s,\"yellow\":%s,\"green\":%s,\"ap\":%s}}",
         esp_timer_get_time() / 1000LL, can_state_name(can.state), laser.node_count,
         laser.rx_frame_count, can.tx_failed_count, can.rx_rejected_count,
         can.rx_queue_overflow_count, can.bus_error_count,
         output.production_network ? "true" : "false",
         output.mqtt_connected ? "true" : "false",
         output.buzzer ? "true" : "false", output.tower_red ? "true" : "false",
-        output.tower_yellow ? "true" : "false", output.tower_green ? "true" : "false");
+        output.tower_yellow ? "true" : "false", output.tower_green ? "true" : "false",
+        output.ap_active ? "true" : "false");
     httpd_resp_set_type(req, "application/json; charset=utf-8");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     return httpd_resp_send(req, json, length);

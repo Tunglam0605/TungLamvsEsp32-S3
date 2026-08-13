@@ -55,7 +55,7 @@ static void status_task(void *argument)
                                 warehouse.online == warehouse.configured;
         const bool next_mismatch = laser_config_mismatch_present();
 
-        gateway_output_set_health(next_network, next_mqtt);
+        gateway_output_set_health(next_network, next_mqtt, next_ap);
         if (!initialized) {
             network = next_network;
             mqtt = next_mqtt;

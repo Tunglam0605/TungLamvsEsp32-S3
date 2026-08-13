@@ -10,11 +10,13 @@ typedef struct {
     bool tower_red;
     bool tower_yellow;
     bool tower_green;
+    bool ap_active;
     bool production_network;
     bool mqtt_connected;
 } gateway_output_snapshot_t;
 
 esp_err_t gateway_output_start(void);
-void gateway_output_set_health(bool production_network, bool mqtt_connected);
+void gateway_output_set_health(bool production_network, bool mqtt_connected,
+                               bool ap_active);
 esp_err_t gateway_output_report(gateway_diagnostic_event_t event);
 void gateway_output_snapshot(gateway_output_snapshot_t *snapshot);
