@@ -8,7 +8,6 @@
 #define LASER_ID_MAX 64U
 
 typedef enum {
-    LASER_PROFILE_GROUP_8 = 0,
     LASER_PROFILE_GROUP_12 = 1,
 } laser_profile_t;
 

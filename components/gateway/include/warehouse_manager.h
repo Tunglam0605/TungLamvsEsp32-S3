@@ -27,7 +27,6 @@ typedef enum {
     WAREHOUSE_DUPLICATE_CODE,
     WAREHOUSE_INVALID_DISTANCE,
     WAREHOUSE_INVALID_TEXT,
-    WAREHOUSE_PROFILE_CONFLICT,
 } warehouse_validation_t;
 
 typedef struct {
@@ -43,6 +42,9 @@ typedef struct {
     uint8_t low_col;
     uint8_t high_row;
     bool proximity_enabled;
+    /* Persisted commissioning flag. A saved draft is not sent automatically
+     * until an authorized user has pressed Apply at least once. */
+    bool config_applied;
 } warehouse_position_config_t;
 
 typedef struct {
@@ -71,14 +73,13 @@ typedef struct {
 
 esp_err_t warehouse_manager_init(void);
 laser_profile_t warehouse_manager_profile(void);
-warehouse_validation_t warehouse_manager_validate_profile(laser_profile_t profile);
-esp_err_t warehouse_manager_set_profile(laser_profile_t profile, bool clear_conflicts);
 warehouse_validation_t warehouse_manager_validate_position(
     const warehouse_position_config_t *position);
 warehouse_validation_t warehouse_manager_validate_candidate(
     laser_profile_t profile, const warehouse_position_config_t *positions,
     size_t position_count, const warehouse_position_config_t *candidate);
 esp_err_t warehouse_manager_set_position(const warehouse_position_config_t *position);
+esp_err_t warehouse_manager_mark_config_applied(uint8_t position_id);
 bool warehouse_manager_get_position(uint8_t position_id, warehouse_position_t *position);
 void warehouse_manager_snapshot(warehouse_snapshot_t *snapshot);
 warehouse_state_t warehouse_state_from_sensor(bool online, bool status_valid,

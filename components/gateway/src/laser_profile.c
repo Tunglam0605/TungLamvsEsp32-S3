@@ -6,13 +6,7 @@
     { (id), (first), (last), \
       (uint16_t)((emergency_base) + (id) - 1U), \
       (uint16_t)((normal_base) + (id) - 1U) }
-#define GROUP_8(id, first, last) GROUP_WITH_EVENTS(id, first, last, 100U, 110U)
 #define GROUP_12(id, first, last) GROUP_WITH_EVENTS(id, first, last, 90U, 105U)
-
-static const laser_group_definition_t GROUPS_8[] = {
-    GROUP_8(1, 1, 10), GROUP_8(2, 11, 20), GROUP_8(3, 21, 30), GROUP_8(4, 31, 40),
-    GROUP_8(5, 41, 46), GROUP_8(6, 47, 52), GROUP_8(7, 53, 58), GROUP_8(8, 59, 64),
-};
 
 static const laser_group_definition_t GROUPS_12[] = {
     GROUP_12(1, 1, 10), GROUP_12(2, 11, 20), GROUP_12(3, 21, 30), GROUP_12(4, 31, 40),
@@ -20,19 +14,17 @@ static const laser_group_definition_t GROUPS_12[] = {
     GROUP_12(9, 53, 55), GROUP_12(10, 56, 58), GROUP_12(11, 59, 61), GROUP_12(12, 62, 64),
 };
 
-static const laser_profile_definition_t PROFILES[] = {
-    { LASER_PROFILE_GROUP_8, 8U, 100U, 110U, GROUPS_8 },
-    { LASER_PROFILE_GROUP_12, 12U, 90U, 105U, GROUPS_12 },
-};
+static const laser_profile_definition_t PROFILE_12 =
+    { LASER_PROFILE_GROUP_12, 12U, 90U, 105U, GROUPS_12 };
 
 const laser_profile_definition_t *laser_profile_definition(laser_profile_t profile)
 {
-    return laser_profile_valid(profile) ? &PROFILES[(unsigned)profile] : NULL;
+    return laser_profile_valid(profile) ? &PROFILE_12 : NULL;
 }
 
 bool laser_profile_valid(laser_profile_t profile)
 {
-    return profile == LASER_PROFILE_GROUP_8 || profile == LASER_PROFILE_GROUP_12;
+    return profile == LASER_PROFILE_GROUP_12;
 }
 
 uint8_t laser_profile_group_count(laser_profile_t profile)
@@ -96,6 +88,5 @@ bool laser_profile_group_for_obstacle_can_id(laser_profile_t profile,
 
 const char *laser_profile_name(laser_profile_t profile)
 {
-    return profile == LASER_PROFILE_GROUP_8 ? "GROUP_8" :
-           profile == LASER_PROFILE_GROUP_12 ? "GROUP_12" : "INVALID";
+    return profile == LASER_PROFILE_GROUP_12 ? "GROUP_12" : "INVALID";
 }

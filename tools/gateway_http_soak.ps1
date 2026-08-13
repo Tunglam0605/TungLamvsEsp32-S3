@@ -1,5 +1,5 @@
 param(
-    [string]$BaseUrl = "http://169.254.1.1",
+    [string]$BaseUrl = "http://192.168.66.204",
     [int]$DurationSeconds = 1800,
     [int]$IntervalSeconds = 10,
     [string]$OutputPath = "tools/logs/gateway_http_soak.jsonl"

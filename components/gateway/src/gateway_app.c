@@ -39,7 +39,9 @@ esp_err_t gateway_app_run(void)
         ESP_LOGE(TAG, "Cannot load Gateway configuration: %s", esp_err_to_name(err));
         return err;
     }
-    gateway_config_t config;
+    /* Keep the large persistent configuration off ESP-IDF's main task stack.
+     * Startup calls several subsystem initializers before app_main returns. */
+    static gateway_config_t config;
     gateway_config_get(&config);
 
     err = gateway_auth_init();
@@ -80,8 +82,9 @@ esp_err_t gateway_app_run(void)
             .dns = config.eth_dns,
         }
         : (bsp_eth_network_config_t) {
-            .dhcp = false, .ip = "169.254.1.1",
-            .netmask = "255.255.0.0", .gateway = "0.0.0.0", .dns = NULL,
+            .dhcp = false, .ip = GATEWAY_ETH_DEBUG_IP,
+            .netmask = GATEWAY_ETH_DEBUG_NETMASK,
+            .gateway = GATEWAY_ETH_DEBUG_GATEWAY, .dns = NULL,
         };
     err = bsp_eth_init_with_config(&eth_network);
     if (err != ESP_OK) {
@@ -105,17 +108,20 @@ esp_err_t gateway_app_run(void)
         return err;
     }
 
-    /* Laser runtime owns discovery, Warn/status decode, timeout and explicit
+    /* Restore the profile, mappings and desired Laser configurations from NVS
+     * before the CAN RX task starts. A Laser may ask for its configuration as
+     * soon as site power returns. */
+    err = warehouse_manager_init();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Cannot initialize warehouse mappings: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    /* Laser runtime owns discovery, Warn/status decode, timeout and the
      * configuration handshake. It never waits for HTTP or MQTT. */
     err = laser_can_bringup_start();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Cannot start laser CAN bring-up: %s", esp_err_to_name(err));
-        return err;
-    }
-
-    err = warehouse_manager_init();
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Cannot initialize warehouse mappings: %s", esp_err_to_name(err));
         return err;
     }
 

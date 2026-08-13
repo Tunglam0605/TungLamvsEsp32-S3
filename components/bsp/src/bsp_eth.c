@@ -395,15 +395,16 @@ fail:
 esp_err_t bsp_eth_init(void)
 {
     const bsp_eth_network_config_t config = {
-        .dhcp = false, .ip = "169.254.1.1", .netmask = "255.255.0.0",
-        .gateway = "0.0.0.0", .dns = NULL,
+        .dhcp = false, .ip = BSP_ETH_LOCAL_IP,
+        .netmask = BSP_ETH_LOCAL_NETMASK,
+        .gateway = BSP_ETH_LOCAL_GATEWAY, .dns = NULL,
     };
     return bsp_eth_init_with_config(&config);
 }
 
 bool bsp_eth_is_connected(void)
 {
-    return s_eth_has_ip;
+    return s_eth_link_up && s_eth_has_ip;
 }
 
 bool bsp_eth_link_is_up(void)
@@ -415,7 +416,7 @@ void bsp_eth_get_status(bsp_eth_status_t *status)
 {
     if (status == NULL) return;
 
-    status->connected = s_eth_has_ip;
+    status->connected = s_eth_link_up && s_eth_has_ip;
     snprintf(status->ip, sizeof(status->ip), "%s", s_eth_ip);
     snprintf(status->gateway, sizeof(status->gateway), "%s", s_eth_gateway);
 }

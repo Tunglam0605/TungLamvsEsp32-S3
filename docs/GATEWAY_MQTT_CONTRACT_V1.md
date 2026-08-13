@@ -15,26 +15,27 @@ warehouse/sensor/{company_id}/{site_id}/{warehouse_id}
 Ví dụ:
 
 ```text
-warehouse/sensor/aubot/ha-noi/kho-vp
+warehouse/sensor/aubot/ha-noi/gw-01
 ```
 
 Ý nghĩa các thành phần:
 
 - `company_id`: mã công ty hoặc chủ dự án, ví dụ `aubot`.
 - `site_id`: mã địa điểm triển khai, ví dụ `ha-noi`.
-- `warehouse_id`: mã kho ổn định dùng để tích hợp, ví dụ `kho-vp`.
-- `warehouse_name`: tên hiển thị, ví dụ `Kho Văn Phòng`; không nằm trong topic.
-- `gateway_id`: định danh thiết bị cho AP, MQTT client ID và chẩn đoán; không nằm
-  trong topic trạng thái kho.
+- `gateway_id`: định danh thiết bị cho AP, MQTT client ID và chẩn đoán.
+- `warehouse_id`: được Gateway sinh tự động bằng cách chuyển `gateway_id` sang
+  chữ thường, ví dụ `GW-01` thành `gw-01`.
+- `warehouse_name`: chính là `gateway_id` để hiển thị, ví dụ `GW-01`; không nằm
+  trong topic.
 
 Mỗi segment `company_id`, `site_id`, `warehouse_id` phải dài từ 1 đến 31 ký tự,
 bắt đầu bằng chữ thường ASCII hoặc số, và các ký tự còn lại chỉ được là
 `a-z`, `0-9`, `-`, `_`. Không chấp nhận chữ hoa, dấu tiếng Việt, khoảng trắng,
 `/`, `+` hoặc `#`.
 
-`warehouse_id` phải được xem là khóa tích hợp ổn định. Đổi `warehouse_name`
-không đổi topic. Đổi `warehouse_id` làm thay đổi toàn bộ topic của kho và cần
-phối hợp với FMS trước khi thực hiện.
+Mỗi Gateway quản lý một kho logic. Vì vậy WebUI không có trường mã kho hoặc tên
+kho độc lập. Đổi `gateway_id` đồng thời đổi `warehouse_id`, AP, MQTT client ID và
+toàn bộ topic; thao tác này cần phối hợp với FMS trước khi thực hiện.
 
 Mỗi bộ `{company_id, site_id, warehouse_id}` chỉ có một publisher sở hữu. Nếu
 nhiều Gateway cùng phục vụ một kho, hệ thống phải có một tầng aggregator duy
@@ -55,8 +56,8 @@ vận hành với nguồn Vision.
 Hai topic trạng thái đầy đủ của ví dụ trên là:
 
 ```text
-warehouse/sensor/aubot/ha-noi/kho-vp/status/json
-warehouse/sensor/aubot/ha-noi/kho-vp/status/bits
+warehouse/sensor/aubot/ha-noi/gw-01/status/json
+warehouse/sensor/aubot/ha-noi/gw-01/status/bits
 ```
 
 Gateway tạo JSON và bits từ cùng một snapshot, sau đó publish cả hai với QoS 1
@@ -65,10 +66,7 @@ lặp; consumer phải xử lý idempotent.
 
 ## Thứ tự và mã hóa trạng thái
 
-Snapshot luôn chứa đủ số vị trí của profile đang dùng:
-
-- profile 8 vị trí: 8 state và 16 ký tự bit;
-- profile 12 vị trí: 12 state và 24 ký tự bit.
+Snapshot luôn chứa đủ 12 vị trí: 12 state và 24 ký tự bit.
 
 Thứ tự cố định là `left_to_right_top_to_bottom`, tức từ trái sang phải rồi từ
 trên xuống dưới. Không loại bỏ vị trí chưa cấu hình.
@@ -99,8 +97,8 @@ không có dấu nháy, newline hoặc byte NUL ở cuối.
   "source_type": "sensor",
   "company_id": "aubot",
   "site_id": "ha-noi",
-  "warehouse_id": "kho-vp",
-  "warehouse_name": "Kho Văn Phòng",
+  "warehouse_id": "gw-01",
+  "warehouse_name": "GW-01",
   "slot_count": 4,
   "order": "left_to_right_top_to_bottom",
   "state_bits": "00011011",
@@ -154,10 +152,10 @@ thuật, không thuộc snapshot chung Vision/Sensor.
 
 ```text
 # Một payload đầy đủ của một kho
-warehouse/sensor/aubot/ha-noi/kho-vp/status/json
+warehouse/sensor/aubot/ha-noi/gw-01/status/json
 
 # Cả JSON và bits của một kho
-warehouse/sensor/aubot/ha-noi/kho-vp/status/+
+warehouse/sensor/aubot/ha-noi/gw-01/status/+
 
 # Tất cả kho cảm biến tại Hà Nội của AUBOT
 warehouse/sensor/aubot/ha-noi/+/status/json
@@ -188,7 +186,7 @@ Credential không truyền trên command line. Đặt chúng trong biến môi t
 $env:MQTT_BENCH_USERNAME = '<user>'
 $env:MQTT_BENCH_PASSWORD = '<password>'
 python tools/mqtt_bench_client.py wcs.example.vn `
-  --company-id aubot --site-id ha-noi --warehouse-id kho-vp `
+  --company-id aubot --site-id ha-noi --warehouse-id gw-01 `
   --verify-status-pair --duration 30
 ```
 

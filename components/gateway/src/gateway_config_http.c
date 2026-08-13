@@ -217,6 +217,7 @@ static bool mqtt_config_changed(const gateway_config_t *before,
     return strcmp(before->gateway_id, after->gateway_id) != 0 ||
            strcmp(before->company_id, after->company_id) != 0 ||
            strcmp(before->site_id, after->site_id) != 0 ||
+           strcmp(before->warehouse_id, after->warehouse_id) != 0 ||
            strcmp(before->mqtt_broker, after->mqtt_broker) != 0 ||
            before->mqtt_port != after->mqtt_port ||
            before->mqtt_transport != after->mqtt_transport ||
@@ -309,8 +310,12 @@ static esp_err_t config_post(httpd_req_t *request)
             return gateway_web_send_text(request, "400 Bad Request",
                                          "Mạng WiFi không hợp lệ");
     }
-    if (config.gateway_id[0] == '\0')
-        return gateway_web_send_text(request, "400 Bad Request", "Mã Gateway không được để trống");
+    if (!gateway_config_gateway_id_valid(config.gateway_id))
+        return gateway_web_send_text(request, "400 Bad Request",
+            "Mã Gateway chỉ được dùng chữ, số, dấu - hoặc _ (tối đa 16 ký tự)");
+    if (!gateway_config_derive_warehouse_identity(&config))
+        return gateway_web_send_text(request, "400 Bad Request",
+                                     "Không thể tạo định danh từ Mã Gateway");
     if (can_mqtt && config.mqtt_port == 0U)
         return gateway_web_send_text(request, "400 Bad Request", "Cổng MQTT không hợp lệ");
     if (can_mqtt && (config.publish_interval_ms < 250U ||
@@ -321,6 +326,9 @@ static esp_err_t config_post(httpd_req_t *request)
     const esp_err_t error = gateway_config_save(&config);
     if (error == ESP_ERR_INVALID_ARG)
         return gateway_web_send_text(request, "400 Bad Request", "Cấu hình không hợp lệ");
+    if (error == ESP_ERR_INVALID_STATE)
+        return gateway_web_send_text(request, "409 Conflict",
+            "Định danh MQTT cũ đang được dọn trên máy chủ; hãy thử đổi Mã Gateway sau khi MQTT online");
     if (error != ESP_OK)
         return gateway_web_send_text(request, "500 Internal Server Error",
                                      "Không thể lưu cấu hình vào bộ nhớ");
@@ -391,25 +399,34 @@ static esp_err_t scan(httpd_req_t *request)
 static esp_err_t status(httpd_req_t *request)
 {
     if (!gateway_auth_require_api(request, GW_PERMISSION_NETWORK_CONFIG, NULL)) return ESP_OK;
+    gateway_config_t config = {0};
     platform_wifi_sta_status_t wifi = {0};
     bsp_eth_status_t ethernet = {0};
+    gateway_config_get(&config);
     platform_wifi_get_sta_status(&wifi);
     bsp_eth_get_status(&ethernet);
+    const bool eth_debug_mode = !config.eth_router_mode;
+    const char *eth_ip = ethernet.ip[0] != '\0' ? ethernet.ip
+                                                  : (eth_debug_mode ? GATEWAY_ETH_DEBUG_IP : "");
     char wifi_ssid[72];
     json_escape(wifi_ssid, sizeof(wifi_ssid), wifi.ssid);
-    char json[560];
+    char json[720];
     const int length = snprintf(json, sizeof(json),
         "{\"wifi\":{\"connected\":%s,\"ssid\":\"%s\",\"ip\":\"%s\",\"rssi\":%d},"
-        "\"ethernet\":{\"connected\":%s,\"ip\":\"%s\",\"uplink\":%s,\"debug\":%s},"
-        "\"production_network\":%s,\"mqtt\":%s,\"ap\":%s,\"ap_manual\":%s,"
+        "\"ethernet\":{\"connected\":%s,\"link\":%s,\"ip\":\"%s\",\"mode\":\"%s\","
+        "\"uplink\":%s,\"debug\":%s},"
+        "\"production_network\":%s,\"mqtt\":%s,\"ap\":%s,\"ap_ip\":\"%s\",\"ap_manual\":%s,"
         "\"time_valid\":%s,\"unix_time\":%lld}",
         wifi.connected ? "true" : "false", wifi_ssid, wifi.ip, wifi.rssi,
-        ethernet.connected ? "true" : "false", ethernet.ip,
+        ethernet.connected ? "true" : "false",
+        bsp_eth_link_is_up() ? "true" : "false", eth_ip,
+        eth_debug_mode ? "DEBUG" : "UPLINK",
         gateway_network_eth_uplink_available() ? "true" : "false",
         gateway_network_eth_debug_active() ? "true" : "false",
         gateway_network_production_available() ? "true" : "false",
         gateway_mqtt_is_connected() ? "true" : "false",
         platform_wifi_ap_is_active() ? "true" : "false",
+        GATEWAY_AP_IP,
         gateway_network_ap_is_manual() ? "true" : "false",
         platform_time_is_valid((time_t)VALID_UNIX_TIME) ? "true" : "false",
         (long long)time(NULL));

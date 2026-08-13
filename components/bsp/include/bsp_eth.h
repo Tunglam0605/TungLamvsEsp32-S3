@@ -37,6 +37,13 @@
 #include <stdint.h>
 #include "esp_err.h"
 
+/* Default local service address used when no product-specific Ethernet
+ * configuration is supplied.  Keep these values in one place so the BSP
+ * fallback and the Gateway debug mode cannot silently diverge. */
+#define BSP_ETH_LOCAL_IP       "192.168.66.204"
+#define BSP_ETH_LOCAL_NETMASK  "255.255.255.0"
+#define BSP_ETH_LOCAL_GATEWAY  "0.0.0.0"
+
 #ifdef __cplusplus
 extern "C" {
 #endif

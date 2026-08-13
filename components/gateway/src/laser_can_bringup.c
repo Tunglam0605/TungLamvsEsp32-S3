@@ -54,13 +54,68 @@ static laser_can_bringup_status_t s_status;
 static laser_can_node_status_t s_nodes[LASER_CAN_MAX_NODES];
 static laser_group_config_t s_group_config[LASER_CAN_B300_GROUP_COUNT];
 static laser_group_obstacle_t s_group_obstacle[LASER_CAN_B300_GROUP_COUNT];
-static laser_profile_t s_profile = LASER_PROFILE_GROUP_8;
+/* The product has one physical layout: 12 B300 groups / 12 warehouse slots. */
+static const laser_profile_t s_profile = LASER_PROFILE_GROUP_12;
 
 static uint8_t b300_group_for_laser(uint8_t laser_id)
 {
     uint8_t group_id = 0U;
     return laser_profile_group_for_id(s_profile, laser_id, &group_id)
                ? (uint8_t)(group_id - 1U) : UINT8_MAX;
+}
+
+static bool valid_config_request(const laser_can_config_request_t *request,
+                                 uint8_t *group_out)
+{
+    if (request == NULL || request->laser_id == 0U ||
+        request->laser_id > LASER_CAN_MAX_NODES ||
+        request->distance_mm > LASER_CAN_DISTANCE_MAX_MM ||
+        request->distance_emergency_mm > request->distance_mm) {
+        return false;
+    }
+    const uint8_t group = b300_group_for_laser(request->laser_id);
+    if (group == UINT8_MAX || group >= LASER_CAN_B300_GROUP_COUNT) {
+        return false;
+    }
+    if (group_out != NULL) {
+        *group_out = group;
+    }
+    return true;
+}
+
+static laser_group_config_t group_config_from_request(
+    const laser_can_config_request_t *request)
+{
+    return (laser_group_config_t) {
+        .armed = true,
+        .distance_mm = request->distance_mm,
+        .distance_emergency_mm = request->distance_emergency_mm,
+        .low_col = request->low_col,
+        .high_row = request->high_row,
+        .proximity_enabled = request->proximity_enabled,
+    };
+}
+
+static bool node_matches_config(const laser_can_node_status_t *node,
+                                const laser_group_config_t *desired)
+{
+    return node->status_valid &&
+           node->proximity_enabled == desired->proximity_enabled &&
+           node->distance_mm == desired->distance_mm &&
+           node->distance_emergency_mm == desired->distance_emergency_mm &&
+           node->low_col == desired->low_col &&
+           node->high_row == desired->high_row;
+}
+
+static esp_err_t send_group_proximity(uint8_t group,
+                                      const laser_group_config_t *config)
+{
+    const bsp_can_frame_t proximity = {
+        .id = 0x002U,
+        .dlc = 2U,
+        .data = { group, config->proximity_enabled ? 1U : 0U },
+    };
+    return bsp_can_send(&proximity, 100U);
 }
 
 static bool frame_laser_id(const bsp_can_frame_t *frame, uint8_t *laser_id)
@@ -175,16 +230,12 @@ static void update_sensor_status(const bsp_can_frame_t *frame)
                                          ? LASER_OBSTACLE_NORMAL
                                          : LASER_OBSTACLE_CLEAR;
     }
-    if (s_group_config[group].armed) {
+    if (group < LASER_CAN_B300_GROUP_COUNT && s_group_config[group].armed) {
         const laser_group_config_t *desired = &s_group_config[group];
         node->config_managed = true;
-        node->config_state =
-            node->proximity_enabled == desired->proximity_enabled &&
-            distance == desired->distance_mm &&
-            distance_emergency == desired->distance_emergency_mm &&
-            node->low_col == desired->low_col &&
-            node->high_row == desired->high_row
-                ? LASER_CONFIG_VERIFIED : LASER_CONFIG_MISMATCH;
+        node->config_state = node_matches_config(node, desired)
+                                 ? LASER_CONFIG_VERIFIED
+                                 : LASER_CONFIG_MISMATCH;
     }
     taskEXIT_CRITICAL(&s_status_mux);
 }
@@ -193,6 +244,11 @@ static void reply_to_config_request(uint8_t laser_id)
 {
     const uint8_t group = b300_group_for_laser(laser_id);
     laser_group_config_t config = { 0 };
+
+    if (group == UINT8_MAX || group >= LASER_CAN_B300_GROUP_COUNT) {
+        ESP_LOGW(TAG, "Ignore config request from unsupported LaserID=%u", laser_id);
+        return;
+    }
 
     taskENTER_CRITICAL(&s_status_mux);
     config = s_group_config[group];
@@ -214,24 +270,28 @@ static void reply_to_config_request(uint8_t laser_id)
             0U, config.low_col, 0U, config.high_row,
         },
     };
-    const esp_err_t err = bsp_can_send(&response, 100U);
+    const esp_err_t response_error = bsp_can_send(&response, 100U);
+    const esp_err_t proximity_error = response_error == ESP_OK
+        ? send_group_proximity(group, &config) : ESP_FAIL;
+    const bool complete = response_error == ESP_OK && proximity_error == ESP_OK;
 
     taskENTER_CRITICAL(&s_status_mux);
     laser_can_node_status_t *node = &s_nodes[laser_id - 1U];
     node->config_managed = true;
-    node->config_state = err == ESP_OK ? LASER_CONFIG_SENT : LASER_CONFIG_FAILED;
-    if (err == ESP_OK) {
+    node->config_state = complete ? LASER_CONFIG_SENT : LASER_CONFIG_FAILED;
+    if (response_error == ESP_OK) {
         ++node->config_tx_count;
     }
     taskEXIT_CRITICAL(&s_status_mux);
 
-    if (err == ESP_OK) {
-        ESP_LOGI(TAG, "TX config LaserID=%u group=%u distance=%u emergency=%u col=%u row=%u",
+    if (complete) {
+        ESP_LOGI(TAG, "TX restored config LaserID=%u group=%u distance=%u emergency=%u col=%u row=%u enable=%u",
                  laser_id, group, config.distance_mm, config.distance_emergency_mm,
-                 config.low_col, config.high_row);
+                 config.low_col, config.high_row, config.proximity_enabled);
     } else {
-        ESP_LOGE(TAG, "Config TX LaserID=%u failed: %s", laser_id,
-                 esp_err_to_name(err));
+        ESP_LOGE(TAG, "Config TX LaserID=%u failed: response=%s proximity=%s",
+                 laser_id, esp_err_to_name(response_error),
+                 esp_err_to_name(proximity_error));
     }
 }
 
@@ -376,7 +436,8 @@ esp_err_t laser_can_bringup_start(void)
     taskENTER_CRITICAL(&s_status_mux);
     memset(&s_status, 0, sizeof(s_status));
     memset(s_nodes, 0, sizeof(s_nodes));
-    memset(s_group_config, 0, sizeof(s_group_config));
+    /* Warehouse Manager may have restored desired configurations from NVS
+     * before this RX task starts. Do not erase that table here. */
     memset(s_group_obstacle, 0, sizeof(s_group_obstacle));
     taskEXIT_CRITICAL(&s_status_mux);
 
@@ -475,25 +536,15 @@ bool laser_can_bringup_get_group(uint8_t group, laser_can_group_status_t *status
 esp_err_t laser_can_bringup_configure(const laser_can_config_request_t *request,
                                       uint8_t *group_out)
 {
-    if (request == NULL || request->laser_id == 0U ||
-        request->laser_id > LASER_CAN_MAX_NODES ||
-        request->distance_mm > LASER_CAN_DISTANCE_MAX_MM ||
-        request->distance_emergency_mm > request->distance_mm) {
+    uint8_t group = 0U;
+    if (!valid_config_request(request, &group)) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    const uint8_t group = b300_group_for_laser(request->laser_id);
     bool detected = false;
     taskENTER_CRITICAL(&s_status_mux);
     detected = s_nodes[request->laser_id - 1U].detected;
-    s_group_config[group] = (laser_group_config_t) {
-            .armed = true,
-            .distance_mm = request->distance_mm,
-            .distance_emergency_mm = request->distance_emergency_mm,
-            .low_col = request->low_col,
-            .high_row = request->high_row,
-            .proximity_enabled = request->proximity_enabled,
-    };
+    s_group_config[group] = group_config_from_request(request);
     if (detected) {
         for (uint8_t index = 0U; index < LASER_CAN_MAX_NODES; ++index) {
             if (s_nodes[index].detected && s_nodes[index].group == group) {
@@ -503,17 +554,13 @@ esp_err_t laser_can_bringup_configure(const laser_can_config_request_t *request,
         }
     }
     taskEXIT_CRITICAL(&s_status_mux);
-    const bsp_can_frame_t proximity = {
-        .id = 0x002U,
-        .dlc = 2U,
-        .data = { group, request->proximity_enabled ? 1U : 0U },
-    };
     if (!detected) {
         if (group_out != NULL) *group_out = group;
         ESP_LOGI(TAG, "Config armed for offline LaserID=%u group=%u", request->laser_id, group);
         return ESP_OK;
     }
-    esp_err_t err = bsp_can_send(&proximity, 100U);
+    const laser_group_config_t desired = group_config_from_request(request);
+    esp_err_t err = send_group_proximity(group, &desired);
     if (err != ESP_OK) {
         return err;
     }
@@ -534,26 +581,49 @@ esp_err_t laser_can_bringup_configure(const laser_can_config_request_t *request,
     return err;
 }
 
-esp_err_t laser_can_bringup_set_profile(laser_profile_t profile)
+esp_err_t laser_can_bringup_replace_configs(
+    const laser_can_config_request_t *requests, size_t request_count)
 {
-    if (!laser_profile_valid(profile)) return ESP_ERR_INVALID_ARG;
+    if ((requests == NULL && request_count != 0U) ||
+        request_count > LASER_CAN_B300_GROUP_COUNT) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* This API is called during boot on the small main task stack. */
+    static laser_group_config_t replacement[LASER_CAN_B300_GROUP_COUNT];
+    memset(replacement, 0, sizeof(replacement));
+    for (size_t index = 0U; index < request_count; ++index) {
+        uint8_t group = 0U;
+        if (!valid_config_request(&requests[index], &group)) {
+            return ESP_ERR_INVALID_ARG;
+        }
+        if (replacement[group].armed) {
+            return ESP_ERR_INVALID_STATE;
+        }
+        replacement[group] = group_config_from_request(&requests[index]);
+    }
+
     taskENTER_CRITICAL(&s_status_mux);
-    s_profile = profile;
-    memset(s_group_obstacle, 0, sizeof(s_group_obstacle));
-    for (uint8_t i = 0; i < LASER_CAN_MAX_NODES; ++i) {
-        if (s_nodes[i].detected) s_nodes[i].group = b300_group_for_laser(s_nodes[i].laser_id);
+    memcpy(s_group_config, replacement, sizeof(s_group_config));
+    for (uint8_t index = 0U; index < LASER_CAN_MAX_NODES; ++index) {
+        laser_can_node_status_t *node = &s_nodes[index];
+        if (!node->detected || node->group >= LASER_CAN_B300_GROUP_COUNT ||
+            !s_group_config[node->group].armed) {
+            node->config_managed = false;
+            node->config_state = LASER_CONFIG_NONE;
+            continue;
+        }
+        node->config_managed = true;
+        node->config_state = node->status_valid
+            ? (node_matches_config(node, &s_group_config[node->group])
+                   ? LASER_CONFIG_VERIFIED : LASER_CONFIG_MISMATCH)
+            : LASER_CONFIG_PENDING;
     }
     taskEXIT_CRITICAL(&s_status_mux);
-    ESP_LOGI(TAG, "Laser profile selected: %s", laser_profile_name(profile));
-    return ESP_OK;
-}
 
-laser_profile_t laser_can_bringup_profile(void)
-{
-    taskENTER_CRITICAL(&s_status_mux);
-    laser_profile_t profile = s_profile;
-    taskEXIT_CRITICAL(&s_status_mux);
-    return profile;
+    ESP_LOGI(TAG, "Restored %u managed Laser group configuration(s)",
+             (unsigned)request_count);
+    return ESP_OK;
 }
 
 const char *laser_can_config_state_name(laser_config_state_t state)

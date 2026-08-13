@@ -100,8 +100,14 @@ bool laser_can_bringup_get_group(uint8_t group, laser_can_group_status_t *status
 
 esp_err_t laser_can_bringup_configure(const laser_can_config_request_t *request,
                                       uint8_t *group_out);
-esp_err_t laser_can_bringup_set_profile(laser_profile_t profile);
-laser_profile_t laser_can_bringup_profile(void);
+
+/**
+ * Replace the desired group configuration table without transmitting a
+ * reload command. Warehouse Manager uses this to restore NVS state before
+ * the CAN RX task starts and after a saved mapping changes.
+ */
+esp_err_t laser_can_bringup_replace_configs(
+    const laser_can_config_request_t *requests, size_t request_count);
 
 const char *laser_can_config_state_name(laser_config_state_t state);
 const char *laser_can_obstacle_state_name(laser_obstacle_state_t state);

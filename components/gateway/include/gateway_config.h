@@ -31,7 +31,7 @@ typedef struct {
     char wifi_netmask[16];
     char wifi_gateway[16];
     char wifi_dns[16];
-    bool eth_router_mode; /* false = debug PC 169.254.1.1 */
+    bool eth_router_mode; /* false = debug PC 192.168.66.204/24 */
     bool eth_dhcp;
     char eth_ip[16];
     char eth_netmask[16];
@@ -51,6 +51,24 @@ typedef struct {
 esp_err_t gateway_config_init(void);
 void gateway_config_get(gateway_config_t *config);
 esp_err_t gateway_config_save(const gateway_config_t *config);
+/**
+ * @brief  Validate the user-facing Gateway identifier.
+ *
+ * Gateway IDs are 1..16 ASCII letters, digits, '-' or '_'.  Keeping this
+ * alphabet guarantees that the automatically derived MQTT warehouse segment
+ * is always valid after conversion to lower case.
+ */
+bool gateway_config_gateway_id_valid(const char *gateway_id);
+/**
+ * @brief  Make the warehouse MQTT/display identity owned by this Gateway.
+ *
+ * Example: GW-01 -> warehouse_id "gw-01", warehouse_name "GW-01".
+ */
+bool gateway_config_derive_warehouse_identity(gateway_config_t *config);
+/** Return an old MQTT identity whose retained status topics still need cleanup. */
+bool gateway_config_get_pending_mqtt_identity(gateway_config_t *config);
+/** Clear the pending old identity after both retained status topics are ACKed. */
+esp_err_t gateway_config_clear_pending_mqtt_identity(void);
 void gateway_config_build_ap_identity(const char *gateway_id,
                                       char *ssid, size_t ssid_capacity,
                                       char *password, size_t password_capacity);

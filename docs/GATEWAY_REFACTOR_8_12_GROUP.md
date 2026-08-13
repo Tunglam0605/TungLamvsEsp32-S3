@@ -4,7 +4,7 @@ Production domain hierarchy:
 
 `BSP CAN -> Laser protocol/profile -> Warehouse group snapshot -> WebUI/MQTT serializer`
 
-- `GROUP_8` has 8 warehouse positions; `GROUP_12` has 12.
+- Firmware Gateway hiện cố định `GROUP_12` với 12 vị trí kho.
 - Each position owns at most one representative LaserID in its table-defined range.
 - Runtime starts `UNKNOWN`; only a valid online status produces `EMPTY` or `OCCUPIED`.
 - NVS namespace `warehouse_v3` stores configuration only. Legacy 64-slot keys are not silently remapped.
@@ -24,10 +24,11 @@ warehouse/sensor/{company_id}/{site_id}/{warehouse_id}/status/bits
 ```
 
 - Hai topic status dùng QoS 1, retained và được tạo từ cùng snapshot.
-- Snapshot luôn giữ đủ 8/12 vị trí. `EMPTY=00`, `OCCUPIED=01`,
+- Snapshot luôn giữ đủ 12 vị trí. `EMPTY=00`, `OCCUPIED=01`,
   `UNKNOWN=10`, `FAULT=11`.
-- `warehouse_id` là khóa tích hợp ổn định; `warehouse_name` chỉ là tên hiển thị.
-- `gateway_id` vẫn dùng cho định danh thiết bị nhưng không nằm trong topic kho.
+- Một Gateway sở hữu một kho logic. `warehouse_id` được sinh tự động bằng cách
+  chuyển `gateway_id` sang chữ thường; `warehouse_name` bằng `gateway_id`.
+- WebUI không cấu hình thêm mã kho hoặc tên kho độc lập.
 - Chỉ `status/json` và `status/bits` thuộc contract MQTT ngoài; không có
   `event`, `cmd` hoặc `availability` riêng.
 - A full retained snapshot is sent immediately after connect/reconnect, after a current-state/config change, and periodically.
@@ -50,3 +51,13 @@ Manual verification matrix:
 | ETH debug has IP | production network remains false |
 | ETH uplink has IP | production network true |
 | MQTT reconnect | immediate current snapshot requested |
+
+## Địa chỉ truy cập cục bộ
+
+- AP cấu hình: `192.168.65.204/24`.
+- Ethernet chế độ debug máy tính: `192.168.66.204/24`.
+- WiFi STA và Ethernet uplink: dùng IP runtime do DHCP cấp hoặc IP tĩnh đã cấu
+  hình. WebUI hiển thị riêng IP của AP, STA và Ethernet.
+
+AP và Ethernet debug dùng hai subnet khác nhau để tránh route cục bộ bị nhập
+nhằng khi cả hai interface cùng hoạt động.

@@ -154,13 +154,14 @@ static esp_err_t status(httpd_req_t *request)
         const bool has_group = position->config.group_id != 0U &&
             laser_profile_group_definition(snapshot.profile, position->config.group_id, &group);
         length = snprintf(buffer, sizeof(buffer),
-            "%s{\"position_id\":%u,\"group_id\":%u,\"enabled\":%s,\"proximity_enabled\":%s,\"laser_id\":%u,"
+            "%s{\"position_id\":%u,\"group_id\":%u,\"enabled\":%s,\"proximity_enabled\":%s,\"config_applied\":%s,\"laser_id\":%u,"
             "\"allowed_first\":%u,\"allowed_last\":%u,\"warehouse_code\":\"%s\",\"warehouse_name\":\"%s\","
             "\"state\":\"%s\",\"sensor_online\":%s,\"last_seen_ago_ms\":%lld,\"warn\":\"%s\","
             "\"config_distance_mm\":%u,\"config_emergency_mm\":%u,\"low_col\":%u,\"high_row\":%u}",
             i ? "," : "", i + 1U, position->config.group_id,
             position->config.enabled ? "true" : "false",
-            position->config.proximity_enabled ? "true" : "false", position->config.laser_id,
+            position->config.proximity_enabled ? "true" : "false",
+            position->config.config_applied ? "true" : "false", position->config.laser_id,
             has_group ? group.laser_id_first : 0U, has_group ? group.laser_id_last : 0U, code, name,
             warehouse_state_name(position->state), position->sensor_online ? "true" : "false",
             position->last_seen_ago_ms, laser_can_obstacle_state_name(position->warn),
@@ -303,23 +304,6 @@ static esp_err_t send_conflict(httpd_req_t *request, const char *message)
     return gateway_web_send_text(request, "409 Conflict", message);
 }
 
-static esp_err_t set_profile(httpd_req_t *request)
-{
-    if (!gateway_auth_require_api(request, GW_PERMISSION_WAREHOUSE_CONFIG, NULL)) return ESP_OK;
-    char body[128] = {0}, profile_name[16] = {0}, clear[4] = {0};
-    if (read_body(request, body, sizeof(body)) != ESP_OK ||
-        !field(body, "profile", profile_name, sizeof(profile_name))) {
-        return gateway_web_send_text(request, "400 Bad Request", "Dữ liệu không hợp lệ");
-    }
-    const laser_profile_t profile = strcmp(profile_name, "GROUP_12") == 0
-        ? LASER_PROFILE_GROUP_12 : LASER_PROFILE_GROUP_8;
-    field(body, "clear_conflicts", clear, sizeof(clear));
-    if (warehouse_manager_set_profile(profile, atoi(clear) != 0) != ESP_OK) {
-        return send_conflict(request, "Mapping hiện tại xung đột với profile mới");
-    }
-    return httpd_resp_sendstr(request, "{\"ok\":true}");
-}
-
 static esp_err_t set_position(httpd_req_t *request)
 {
     if (!gateway_auth_require_api(request, GW_PERMISSION_WAREHOUSE_CONFIG, NULL)) return ESP_OK;
@@ -328,12 +312,25 @@ static esp_err_t set_position(httpd_req_t *request)
         return gateway_web_send_text(request, "400 Bad Request", "Dữ liệu quá dài");
     }
     warehouse_position_config_t position = {0};
+    if (!field(body, "position_id", value, sizeof(value))) {
+        return gateway_web_send_text(request, "400 Bad Request",
+                                     "Thiếu trường position_id");
+    }
+    const uint8_t position_id = (uint8_t)strtoul(value, NULL, 10);
+    warehouse_position_t current = {0};
+    if (!warehouse_manager_get_position(position_id, &current)) {
+        return gateway_web_send_text(request, "400 Bad Request",
+                                     "Vị trí không hợp lệ");
+    }
+    /* Per-position display metadata is no longer editable in the active UI,
+     * but remains part of the persisted layout for backward compatibility.
+     * Start from the stored record so a metadata-free POST cannot erase it. */
+    position = current.config;
 #define READ_UINT(key, member) do { \
     if (!field(body, key, value, sizeof(value))) \
         return gateway_web_send_text(request, "400 Bad Request", "Thiếu trường " key); \
     position.member = (typeof(position.member))strtoul(value, NULL, 10); \
 } while (0)
-    READ_UINT("position_id", position_id);
     READ_UINT("group_id", group_id);
     READ_UINT("laser_id", laser_id);
     READ_UINT("distance_mm", distance_mm);
@@ -347,6 +344,10 @@ static esp_err_t set_position(httpd_req_t *request)
         strlcpy(position.warehouse_code, value, sizeof(position.warehouse_code));
     if (field(body, "warehouse_name", value, sizeof(value)))
         strlcpy(position.warehouse_name, value, sizeof(position.warehouse_name));
+    if (position.enabled && position.warehouse_code[0] == '\0') {
+        snprintf(position.warehouse_code, sizeof(position.warehouse_code),
+                 "VT-%02u", position.position_id);
+    }
 
     const warehouse_validation_t validation = warehouse_manager_validate_position(&position);
     if (validation != WAREHOUSE_VALID) {
@@ -380,6 +381,13 @@ static esp_err_t apply_laser(httpd_req_t *request)
     };
     const esp_err_t error = laser_can_bringup_configure(&config, NULL);
     if (error != ESP_OK) return httpd_resp_send_err(request, 500, esp_err_to_name(error));
+    /* Only commission the desired state after the explicit CAN apply sequence
+     * was accepted by the driver. If NVS fails, mark_config_applied restores
+     * the previous in-memory desired table and the operator can retry. */
+    const esp_err_t persist_error = warehouse_manager_mark_config_applied(
+        position.config.position_id);
+    if (persist_error != ESP_OK)
+        return httpd_resp_send_err(request, 500, esp_err_to_name(persist_error));
     httpd_resp_set_status(request, "202 Accepted");
     return httpd_resp_sendstr(request, "{\"accepted\":true}");
 }
@@ -391,11 +399,9 @@ esp_err_t warehouse_http_register(httpd_handle_t server)
         {.uri = "/app/factory", .method = HTTP_GET, .handler = factory_page},
         {.uri = "/api/warehouse/status", .method = HTTP_GET, .handler = status},
         {.uri = "/api/public/status", .method = HTTP_GET, .handler = public_status},
-        {.uri = "/api/warehouse/profile", .method = HTTP_POST, .handler = set_profile},
         {.uri = "/api/warehouse/position", .method = HTTP_POST, .handler = set_position},
         {.uri = "/api/factory/status", .method = HTTP_GET, .handler = status},
         {.uri = "/api/factory/lasers", .method = HTTP_GET, .handler = factory_lasers},
-        {.uri = "/api/factory/profile", .method = HTTP_POST, .handler = set_profile},
         {.uri = "/api/factory/warehouse", .method = HTTP_POST, .handler = set_position},
         {.uri = "/api/factory/laser/apply", .method = HTTP_POST, .handler = apply_laser},
     };

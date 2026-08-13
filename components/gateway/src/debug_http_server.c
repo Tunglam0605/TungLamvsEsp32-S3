@@ -18,6 +18,7 @@
 #include "gateway_auth.h"
 #include "gateway_auth_http.h"
 #include "gateway_output.h"
+#include "gateway_network.h"
 
 static const char *TAG = "DEBUG_HTTP";
 static httpd_handle_t s_server;
@@ -70,7 +71,7 @@ static const char DEBUG_PAGE[] =
     "<header class='topbar'><div class='brand'><div class='mark' aria-hidden='true'><svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8'><path d='M4 17V7l8-4 8 4v10l-8 4-8-4Z'/><path d='m4 7 8 5 8-5M12 12v9'/></svg></div><div><div class='kicker'>CỔNG KẾT NỐI AUBOT</div><h1 class='title'>Giám sát Laser CAN</h1></div></div>"
     "<div class='actions'><a class='api' href='/api/debug/status' target='_blank' rel='noopener'><svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' aria-hidden='true'><path d='M8 9 4 12l4 3m8-6 4 3-4 3m-3-8-2 10'/></svg>Dữ liệu JSON</a><button id='toggle' class='btn' type='button' aria-label='Tạm dừng cập nhật' aria-pressed='false'><svg id='toggleIcon' viewBox='0 0 24 24' fill='currentColor' aria-hidden='true'><path d='M8 5h3v14H8zm5 0h3v14h-3z'/></svg><span id='toggleText'>Tạm dừng</span></button></div></header>"
     "<main id='main'><section class='hero'><article class='panel laser-panel' aria-labelledby='laserTitle'><div><div id='laserStatus' class='statusline off' role='status' aria-live='polite'><span class='dot'></span><span id='laserStatusText'>Đang tìm cảm biến</span></div><h2 id='laserTitle' class='laser-title'>Chưa nhận diện Laser</h2><div id='laserHint' class='muted'>Đang chờ khung CAN phản hồi từ module.</div></div><div class='id-block'><div class='id-label'>Mã Laser</div><div id='laserId' class='laser-id empty'>--</div></div></article>"
-    "<aside class='panel health' aria-label='Trạng thái kết nối'><div class='health-row'><span class='health-name'><svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' aria-hidden='true'><path d='M6 9V3m12 6V3M4 9h16v5a8 8 0 0 1-16 0V9Zm8 8v4'/></svg>Mạng Ethernet</span><span id='ethChip' class='chip'>ĐANG KIỂM TRA</span></div><div class='health-row'><span class='health-name'><svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' aria-hidden='true'><path d='M5 7h14v10H5zM8 4v3m8-3v3M8 17v3m8-3v3M2 10h3m14 0h3M2 14h3m14 0h3'/></svg>Mạng CAN</span><span id='canChip' class='chip'>ĐANG KIỂM TRA</span></div><div class='health-row'><span class='health-name'>Địa chỉ thiết bị</span><strong id='ethIp' class='mono'>169.254.1.1</strong></div></aside></section>"
+    "<aside class='panel health' aria-label='Trạng thái kết nối'><div class='health-row'><span class='health-name'><svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' aria-hidden='true'><path d='M6 9V3m12 6V3M4 9h16v5a8 8 0 0 1-16 0V9Zm8 8v4'/></svg>Mạng Ethernet</span><span id='ethChip' class='chip'>ĐANG KIỂM TRA</span></div><div class='health-row'><span class='health-name'><svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' aria-hidden='true'><path d='M5 7h14v10H5zM8 4v3m8-3v3M8 17v3m8-3v3M2 10h3m14 0h3M2 14h3m14 0h3'/></svg>Mạng CAN</span><span id='canChip' class='chip'>ĐANG KIỂM TRA</span></div><div class='health-row'><span class='health-name'>Địa chỉ thiết bị</span><strong id='ethIp' class='mono'>" GATEWAY_ETH_DEBUG_IP "</strong></div></aside></section>"
     "<section class='kpis' aria-label='Số liệu chính'><article class='kpi'><div class='kpi-top'><span class='label'>Khung nhận</span><span class='kpi-icon'><svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' aria-hidden='true'><path d='M12 3v14m-5-5 5 5 5-5M5 21h14'/></svg></span></div><div id='rxFrames' class='value'>0</div><div id='rxMeta' class='sub'>Chưa có dữ liệu Laser</div></article>"
     "<article class='kpi'><div class='kpi-top'><span class='label'>Khung gửi thành công</span><span class='kpi-icon'><svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' aria-hidden='true'><path d='m5 12 4 4L19 6'/></svg></span></div><div id='txOk' class='value'>0</div><div id='txFail' class='sub'>0 lần thất bại</div></article>"
     "<article class='kpi'><div class='kpi-top'><span class='label'>Lỗi mạng CAN</span><span class='kpi-icon'><svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' aria-hidden='true'><path d='M12 9v4m0 4h.01M10.3 4.4 2.8 18a2 2 0 0 0 1.8 3h14.8a2 2 0 0 0 1.8-3L13.7 4.4a2 2 0 0 0-3.4 0Z'/></svg></span></div><div id='busErrors' class='value'>0</div><div id='busMeta' class='sub'>CAN đang ổn định</div></article>"
@@ -95,7 +96,7 @@ static const char DEBUG_PAGE[] =
     "function selectSensor(id,load,mode){selectedId=Number(id);const n=lastNodes.find(x=>x.id===selectedId);if(!n)return;selectionMode=mode||'sensor';selectedGroup=n.group;$('sensorSelect').value=String(selectedId);set('formGroup','NHÓM '+n.group);if(load&&n.status_valid){$('distance').value=n.distance_mm;$('emergency').value=n.emergency_mm;$('lowCol').value=n.low_col;$('highRow').value=n.high_row;$('enabled').checked=n.enabled}set('configFeedback',n.status_valid?'Đã nạp cấu hình Laser '+n.id+' đang báo.':'Laser chưa trả trạng thái DLC7; đang dùng giá trị nhập tay.');$('configFeedback').className='feedback';renderIdGrid();updateSelection();renderMatrix();renderObstacle()}"
     "function selectGroup(group){const g=Number(group),n=lastNodes.find(x=>x.group===g&&x.alive)||lastNodes.find(x=>x.group===g);selectedGroup=g;selectionMode='group';if(n)selectSensor(n.id,true,'group');else{selectedId=null;set('formGroup','NHÓM '+g);$('applyConfig').disabled=true;renderIdGrid();updateSelection()}}"
     "function renderNodes(nodes){lastNodes=nodes;const online=nodes.filter(n=>n.alive).length,occupied=lastSlots.filter(s=>s.state==='OCCUPIED'||s.state==='CRITICAL').length;set('nodeCount',online+' / 64 ONLINE · '+occupied+' CÓ HÀNG');const select=$('sensorSelect'),old=selectedId;select.innerHTML=nodes.length?nodes.map(n=>'<option value='+n.id+'>Laser '+n.id+' · Nhóm '+n.group+(n.alive?' · Online':' · Ngoại tuyến')+'</option>').join(''):'<option value=\"\">Chưa phát hiện cảm biến</option>';select.disabled=!nodes.length;$('applyConfig').disabled=!nodes.length;if(nodes.length&&(old===null||!nodes.some(n=>n.id===old)))selectSensor((nodes.find(n=>n.alive)||nodes[0]).id,true,'sensor');else{if(old!==null)select.value=String(old);renderIdGrid();updateSelection()}}"
-    "function update(d){const eth=d.ethernet,can=d.can,l=d.laser,canOk=can.state==='ACTIVE';cls('ethChip',eth.connected);set('ethChip',eth.connected?'KẾT NỐI':'MẤT KẾT NỐI');cls('canChip',canOk);set('canChip',canLabel(can.state));set('ethIp',eth.ip||'169.254.1.1');"
+    "function update(d){const eth=d.ethernet,can=d.can,l=d.laser,canOk=can.state==='ACTIVE',ethOk=eth.link&&eth.connected;cls('ethChip',ethOk);set('ethChip',ethOk?'KẾT NỐI':eth.link?'ĐANG LẤY IP':'CHƯA CẮM CÁP');cls('canChip',canOk);set('canChip',canLabel(can.state));set('ethIp',eth.ip||'" GATEWAY_ETH_DEBUG_IP "');"
     "$('laserStatus').className='statusline'+(l.detected?'':' off');set('laserStatusText',l.detected?l.node_count+' LaserID đang hoạt động':'Đang tìm cảm biến');set('laserTitle',l.detected?'Laser '+l.id+' đã kết nối':'Chưa nhận diện Laser');set('laserId',l.detected?l.id:'--');$('laserId').className='laser-id'+(l.detected?'':' empty');set('laserHint',l.detected?'Đang theo dõi theo thời gian thực '+l.node_count+' địa chỉ logic trên mạng CAN.':'Đang chờ khung CAN phản hồi từ module.');"
     "set('rxFrames',l.rx_frames);set('rxMeta',l.detected?'Khung Laser đã nhận':'Chưa có dữ liệu Laser');set('txOk',can.tx_ok);set('txFail',can.tx_fail+' lần thất bại');$('txFail').className='sub '+(can.tx_fail?'badtext':'good');set('busErrors',can.bus_error);set('busMeta',can.bus_error?'Đã ghi nhận lỗi trên bus':'CAN đang ổn định');$('busMeta').className='sub '+(can.bus_error?'warn':'good');set('lastSeen',l.detected?l.last_seen_ago_ms+' ms':'--');"
     "set('lastId',l.detected?'0x'+l.last_id.toString(16).toUpperCase().padStart(3,'0'):'--');set('lastDlc',l.detected?l.last_dlc:'--');set('frameLaserId',l.detected?l.id:'--');set('lastType',l.detected?(l.remote?'YÊU CẦU':'DỮ LIỆU'):'--');set('canStateText',canLabel(can.state));set('errors',can.tx_error+' / '+can.rx_error);set('drops',can.rx_rejected+' / '+can.rx_dropped);set('txFailDetail',can.tx_fail);renderCanErrors(can);set('updated','Cập nhật '+new Date().toLocaleTimeString('vi-VN'));$('footerDot').style.color=eth.connected?'var(--green)':'var(--red)';drawTrend(l.rx_frames);lastGroups=d.groups||[];renderNodes(d.nodes||[]);renderObstacle()}"
@@ -140,7 +141,7 @@ static esp_err_t status_handler(httpd_req_t *req)
     char json[1024];
     const int len = snprintf(json, sizeof(json),
         "{\"uptime_ms\":%" PRId64 ","
-        "\"ethernet\":{\"connected\":%s,\"ip\":\"%s\",\"gateway\":\"%s\"},"
+        "\"ethernet\":{\"connected\":%s,\"link\":%s,\"ip\":\"%s\",\"gateway\":\"%s\"},"
         "\"can\":{\"state\":\"%s\",\"tx_error\":%u,\"rx_error\":%u,"
         "\"bus_error\":%" PRIu32 ",\"tx_ok\":%" PRIu32 ",\"tx_fail\":%" PRIu32 ","
         "\"rx_rejected\":%" PRIu32 ",\"rx_dropped\":%" PRIu32 ","
@@ -151,7 +152,8 @@ static esp_err_t status_handler(httpd_req_t *req)
         "\"laser\":{\"detected\":%s,\"id\":%u,\"node_count\":%u,"
         "\"rx_frames\":%" PRIu32 ",\"last_id\":%u,\"last_dlc\":%u,"
         "\"remote\":%s,\"last_seen_ago_ms\":%" PRId64 "},\"nodes\":[",
-        now_ms, eth.connected ? "true" : "false", eth.ip, eth.gateway,
+        now_ms, eth.connected ? "true" : "false",
+        bsp_eth_link_is_up() ? "true" : "false", eth.ip, eth.gateway,
         can_state_name(can.state), can.tx_error_count, can.rx_error_count,
         can.bus_error_count, can.tx_success_count, can.tx_failed_count,
         can.rx_rejected_count, can.rx_queue_overflow_count,
@@ -470,7 +472,9 @@ esp_err_t debug_http_server_start(void)
         return err;
     }
 
-    ESP_LOGI(TAG, "Warehouse dashboard ready: http://169.254.1.1/");
-    ESP_LOGI(TAG, "Debug dashboard ready: http://169.254.1.1/debug");
+    ESP_LOGI(TAG, "Warehouse dashboard Ethernet debug: http://%s/",
+             GATEWAY_ETH_DEBUG_IP);
+    ESP_LOGI(TAG, "Debug dashboard Ethernet debug: http://%s/debug",
+             GATEWAY_ETH_DEBUG_IP);
     return ESP_OK;
 }

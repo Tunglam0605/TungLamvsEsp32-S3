@@ -1,6 +1,7 @@
 #include "gateway_output.h"
 
 #include <string.h>
+#include "bsp_buzzer.h"
 #include "bsp_do.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -12,6 +13,8 @@
 #define OUTPUT_QUEUE_DEPTH 12U
 #define OUTPUT_TICK_MS 20U
 #define TOWER_BLINK_MS 500U
+#define ONBOARD_BUZZER_HZ 2000U
+#define ONBOARD_BUZZER_DUTY 50U
 
 typedef struct {
     uint16_t on_ms;
@@ -98,6 +101,7 @@ static void output_task(void *argument)
     uint32_t tower_deadline = now_ms() + TOWER_BLINK_MS, buzzer_deadline = 0;
     const buzzer_pattern_t *pattern = NULL;
     uint8_t step = 0;
+    bool onboard_rendered = false;
 
     for (;;) {
         gateway_diagnostic_event_t event;
@@ -139,6 +143,20 @@ static void output_task(void *argument)
         }
         /* Only DO1..DO4 can ever be set; DO5..DO8 stay reserved/OFF. */
         commit_output(desired, &rendered);
+        /* DO1 drives the tower buzzer and GPIO46 drives the onboard buzzer.
+         * Both are rendered from the same state machine so every pulse starts
+         * and ends in the same output tick. */
+        if (buzzer_on != onboard_rendered) {
+            const esp_err_t error = buzzer_on
+                ? bsp_buzzer_set(ONBOARD_BUZZER_HZ, ONBOARD_BUZZER_DUTY)
+                : bsp_buzzer_off();
+            if (error == ESP_OK) {
+                onboard_rendered = buzzer_on;
+            } else {
+                ESP_LOGE(TAG, "Onboard buzzer update failed: %s",
+                         esp_err_to_name(error));
+            }
+        }
     }
 }
 
@@ -146,6 +164,7 @@ esp_err_t gateway_output_start(void)
 {
     if (s_events != NULL) return ESP_OK;
     if (bsp_do_all_off() != ESP_OK) return ESP_FAIL;
+    if (bsp_buzzer_off() != ESP_OK) return ESP_FAIL;
     s_events = xQueueCreate(OUTPUT_QUEUE_DEPTH, sizeof(gateway_diagnostic_event_t));
     if (s_events == NULL ||
         xTaskCreate(output_task, "gw_output", 3072, NULL, 6, NULL) != pdPASS) {
@@ -153,7 +172,7 @@ esp_err_t gateway_output_start(void)
         (void)bsp_do_all_off();
         return ESP_ERR_NO_MEM;
     }
-    ESP_LOGI(TAG, "Single output owner ready: DO1 buzzer, DO2 red, DO3 yellow, DO4 green");
+    ESP_LOGI(TAG, "Single output owner ready: DO1 + onboard buzzer synchronized, DO2 red, DO3 yellow, DO4 green");
     return ESP_OK;
 }
 

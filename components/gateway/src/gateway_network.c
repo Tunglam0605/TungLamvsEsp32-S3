@@ -80,7 +80,7 @@ esp_err_t gateway_network_start(const gateway_config_t *config)
     platform_wifi_sta_network_config_t sta = {.dhcp=config->wifi_dhcp,.ip=config->wifi_ip,
         .netmask=config->wifi_netmask,.gateway=config->wifi_gateway,.dns=config->wifi_dns};
     platform_wifi_ap_config_t ap = {.ssid=ap_ssid,.password=ap_password,
-        .ip="192.168.65.204",.netmask="255.255.255.0",.channel=1,.max_clients=4};
+        .ip=GATEWAY_AP_IP,.netmask=GATEWAY_AP_NETMASK,.channel=1,.max_clients=4};
     esp_err_t e = platform_wifi_start_apsta(&sta, &ap, NULL, NULL);
     if (e != ESP_OK) return e;
     s_started = true;
@@ -98,7 +98,7 @@ esp_err_t gateway_network_apply(const gateway_config_t *config)
     gateway_config_build_ap_identity(config->gateway_id, ap_ssid, sizeof(ap_ssid),
                                      ap_password, sizeof(ap_password));
     const platform_wifi_ap_config_t ap = {.ssid=ap_ssid,.password=ap_password,
-        .ip="192.168.65.204",.netmask="255.255.255.0",.channel=1,.max_clients=4};
+        .ip=GATEWAY_AP_IP,.netmask=GATEWAY_AP_NETMASK,.channel=1,.max_clients=4};
     (void)platform_wifi_apply_ap_config(&ap);
     (void)platform_wifi_sta_disconnect();
     connect_best();
@@ -107,8 +107,8 @@ esp_err_t gateway_network_apply(const gateway_config_t *config)
             .dhcp=config->eth_dhcp,.ip=config->eth_ip,.netmask=config->eth_netmask,
             .gateway=config->eth_gateway,.dns=config->eth_dns}
         : (bsp_eth_network_config_t) {
-            .dhcp=false,.ip="169.254.1.1",.netmask="255.255.0.0",
-            .gateway="0.0.0.0",.dns=NULL};
+            .dhcp=false,.ip=GATEWAY_ETH_DEBUG_IP,.netmask=GATEWAY_ETH_DEBUG_NETMASK,
+            .gateway=GATEWAY_ETH_DEBUG_GATEWAY,.dns=NULL};
     return bsp_eth_apply_network_config(&eth);
 }
 

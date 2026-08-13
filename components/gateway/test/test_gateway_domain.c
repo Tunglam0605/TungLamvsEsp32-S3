@@ -178,10 +178,6 @@ TEST_CASE("gateway WiFi profiles promote the latest selection", "[gateway][wifi]
 TEST_CASE("laser profile exact boundaries", "[gateway]")
 {
     uint8_t group = 0;
-    TEST_ASSERT_TRUE(laser_profile_group_for_id(LASER_PROFILE_GROUP_8, 46, &group));
-    TEST_ASSERT_EQUAL_UINT8(5, group);
-    TEST_ASSERT_TRUE(laser_profile_group_for_id(LASER_PROFILE_GROUP_8, 47, &group));
-    TEST_ASSERT_EQUAL_UINT8(6, group);
     TEST_ASSERT_TRUE(laser_profile_group_for_id(LASER_PROFILE_GROUP_12, 43, &group));
     TEST_ASSERT_EQUAL_UINT8(5, group);
     TEST_ASSERT_TRUE(laser_profile_group_for_id(LASER_PROFILE_GROUP_12, 44, &group));
@@ -193,12 +189,6 @@ TEST_CASE("laser profile exact boundaries", "[gateway]")
 TEST_CASE("laser obstacle event IDs follow each profile", "[gateway]")
 {
     laser_group_definition_t group = {0};
-    TEST_ASSERT_TRUE(laser_profile_group_definition(LASER_PROFILE_GROUP_8, 1, &group));
-    TEST_ASSERT_EQUAL_UINT16(100, group.emergency_can_id);
-    TEST_ASSERT_EQUAL_UINT16(110, group.normal_can_id);
-    TEST_ASSERT_TRUE(laser_profile_group_definition(LASER_PROFILE_GROUP_8, 8, &group));
-    TEST_ASSERT_EQUAL_UINT16(107, group.emergency_can_id);
-    TEST_ASSERT_EQUAL_UINT16(117, group.normal_can_id);
     TEST_ASSERT_TRUE(laser_profile_group_definition(LASER_PROFILE_GROUP_12, 1, &group));
     TEST_ASSERT_EQUAL_UINT16(90, group.emergency_can_id);
     TEST_ASSERT_EQUAL_UINT16(105, group.normal_can_id);
@@ -213,6 +203,15 @@ TEST_CASE("only Ethernet uplink counts as production network", "[gateway]")
     TEST_ASSERT_TRUE(gateway_network_production_state(false, true, true));
     TEST_ASSERT_TRUE(gateway_network_production_state(true, false, false));
     TEST_ASSERT_FALSE(gateway_network_production_state(false, false, true));
+}
+
+TEST_CASE("local AP and Ethernet debug use separate fixed subnets", "[gateway]")
+{
+    TEST_ASSERT_EQUAL_STRING("192.168.65.204", GATEWAY_AP_IP);
+    TEST_ASSERT_EQUAL_STRING("255.255.255.0", GATEWAY_AP_NETMASK);
+    TEST_ASSERT_EQUAL_STRING("192.168.66.204", GATEWAY_ETH_DEBUG_IP);
+    TEST_ASSERT_EQUAL_STRING("255.255.255.0", GATEWAY_ETH_DEBUG_NETMASK);
+    TEST_ASSERT_NOT_EQUAL(0, strcmp(GATEWAY_AP_IP, GATEWAY_ETH_DEBUG_IP));
 }
 
 TEST_CASE("warehouse offline is unknown", "[gateway]")
@@ -237,7 +236,7 @@ TEST_CASE("warehouse candidate rejects duplicates and invalid distance", "[gatew
         .distance_mm=600,.distance_emergency_mm=300,
     };
     TEST_ASSERT_EQUAL(WAREHOUSE_DUPLICATE_LASER_ID,
-        warehouse_manager_validate_candidate(LASER_PROFILE_GROUP_8, positions, 2, &candidate));
+        warehouse_manager_validate_candidate(LASER_PROFILE_GROUP_12, positions, 2, &candidate));
     candidate.position_id = 2;
     candidate.group_id = 2;
     candidate.laser_id = 11;
@@ -246,11 +245,96 @@ TEST_CASE("warehouse candidate rejects duplicates and invalid distance", "[gatew
     positions[0].group_id = 1;
     positions[0].laser_id = 1;
     TEST_ASSERT_EQUAL(WAREHOUSE_DUPLICATE_CODE,
-        warehouse_manager_validate_candidate(LASER_PROFILE_GROUP_8, positions, 2, &candidate));
+        warehouse_manager_validate_candidate(LASER_PROFILE_GROUP_12, positions, 2, &candidate));
     strlcpy(candidate.warehouse_code, "KHO-B02", sizeof(candidate.warehouse_code));
     candidate.distance_emergency_mm = 700;
     TEST_ASSERT_EQUAL(WAREHOUSE_INVALID_DISTANCE,
-        warehouse_manager_validate_candidate(LASER_PROFILE_GROUP_8, positions, 2, &candidate));
+        warehouse_manager_validate_candidate(LASER_PROFILE_GROUP_12, positions, 2, &candidate));
+}
+
+TEST_CASE("warehouse commissioning is explicit and validation neutral",
+          "[gateway][warehouse][laser-config]")
+{
+    const warehouse_position_config_t existing[] = {
+        {
+            .enabled = true,
+            .position_id = 2,
+            .group_id = 2,
+            .laser_id = 11,
+            .warehouse_code = "KHO-02",
+            .distance_mm = 600,
+            .distance_emergency_mm = 300,
+            .low_col = 0x0FU,
+            .high_row = 0xF0U,
+            .proximity_enabled = true,
+            .config_applied = true,
+        },
+    };
+    warehouse_position_config_t draft = {
+        .enabled = true,
+        .position_id = 1,
+        .group_id = 1,
+        .laser_id = 2,
+        .warehouse_code = "KHO-01",
+        .distance_mm = 700,
+        .distance_emergency_mm = 350,
+        .low_col = 0x33U,
+        .high_row = 0xCCU,
+        .proximity_enabled = true,
+        /* Saving a mapping must not implicitly mean that Apply was pressed. */
+        .config_applied = false,
+    };
+
+    TEST_ASSERT_EQUAL(WAREHOUSE_VALID, warehouse_manager_validate_candidate(
+        LASER_PROFILE_GROUP_12, existing, 1U, &draft));
+    TEST_ASSERT_FALSE(draft.config_applied);
+
+    draft.config_applied = true;
+    TEST_ASSERT_EQUAL(WAREHOUSE_VALID, warehouse_manager_validate_candidate(
+        LASER_PROFILE_GROUP_12, existing, 1U, &draft));
+    TEST_ASSERT_TRUE(draft.config_applied);
+}
+
+TEST_CASE("restored Laser configuration table fails closed on invalid input",
+          "[gateway][laser-config][restore]")
+{
+    const laser_can_config_request_t valid[] = {
+        {
+            .laser_id = 2,
+            .distance_mm = 600,
+            .distance_emergency_mm = 300,
+            .low_col = 0x0FU,
+            .high_row = 0xF0U,
+            .proximity_enabled = true,
+        },
+        {
+            .laser_id = 64,
+            .distance_mm = 800,
+            .distance_emergency_mm = 400,
+            .low_col = 0x33U,
+            .high_row = 0xCCU,
+            .proximity_enabled = false,
+        },
+    };
+
+    TEST_ASSERT_EQUAL(ESP_OK,
+        laser_can_bringup_replace_configs(valid, 2U));
+    /* Clear immediately: this test must never leave a later hardware test
+     * able to answer a Laser configuration request. */
+    TEST_ASSERT_EQUAL(ESP_OK,
+        laser_can_bringup_replace_configs(NULL, 0U));
+
+    laser_can_config_request_t duplicate_group[] = { valid[0], valid[0] };
+    duplicate_group[1].laser_id = 10U;
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_STATE,
+        laser_can_bringup_replace_configs(duplicate_group, 2U));
+
+    laser_can_config_request_t invalid = valid[0];
+    invalid.distance_emergency_mm = invalid.distance_mm + 1U;
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG,
+        laser_can_bringup_replace_configs(&invalid, 1U));
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG,
+        laser_can_bringup_replace_configs(NULL, 1U));
 }
 
 TEST_CASE("MQTT identity segment validator is strict", "[gateway][mqtt][topic]")
@@ -271,6 +355,59 @@ TEST_CASE("MQTT identity segment validator is strict", "[gateway][mqtt][topic]")
     TEST_ASSERT_FALSE(gateway_topic_segment_valid("ha#noi"));
     TEST_ASSERT_FALSE(gateway_topic_segment_valid("hà-nội"));
     TEST_ASSERT_FALSE(gateway_topic_segment_valid("12345678901234567890123456789012"));
+}
+
+TEST_CASE("Gateway ID deterministically owns warehouse identity", "[gateway][config][mqtt]")
+{
+    gateway_config_t config = mqtt_identity("legacy-kho", "Legacy Kho");
+    strlcpy(config.gateway_id, "GW-01_A", sizeof(config.gateway_id));
+    TEST_ASSERT_TRUE(gateway_config_gateway_id_valid(config.gateway_id));
+    TEST_ASSERT_TRUE(gateway_config_derive_warehouse_identity(&config));
+    TEST_ASSERT_EQUAL_STRING("gw-01_a", config.warehouse_id);
+    TEST_ASSERT_EQUAL_STRING("GW-01_A", config.warehouse_name);
+
+    gateway_topic_set_t topics = {0};
+    TEST_ASSERT_EQUAL(ESP_OK, gateway_topic_build_set(&config, &topics));
+    TEST_ASSERT_EQUAL_STRING(
+        "warehouse/sensor/aubot/ha-noi/gw-01_a/status/json",
+        topics.status_json);
+}
+
+TEST_CASE("Gateway ID rejects characters unsafe for automatic MQTT identity",
+          "[gateway][config][mqtt]")
+{
+    TEST_ASSERT_TRUE(gateway_config_gateway_id_valid("GW-01"));
+    TEST_ASSERT_TRUE(gateway_config_gateway_id_valid("1_gateway"));
+    TEST_ASSERT_FALSE(gateway_config_gateway_id_valid(NULL));
+    TEST_ASSERT_FALSE(gateway_config_gateway_id_valid(""));
+    TEST_ASSERT_FALSE(gateway_config_gateway_id_valid("-GW-01"));
+    TEST_ASSERT_FALSE(gateway_config_gateway_id_valid("_GW-01"));
+    TEST_ASSERT_FALSE(gateway_config_gateway_id_valid("GW 01"));
+    TEST_ASSERT_FALSE(gateway_config_gateway_id_valid("GW/01"));
+    TEST_ASSERT_FALSE(gateway_config_gateway_id_valid("12345678901234567"));
+}
+
+TEST_CASE("automatic AP password stays secured for one-character Gateway ID",
+          "[gateway][config][network]")
+{
+    char password[64] = {0};
+    gateway_config_build_ap_identity("X", NULL, 0U, password,
+                                     sizeof(password));
+    TEST_ASSERT_EQUAL_STRING("AUBOT-X0", password);
+    TEST_ASSERT_GREATER_OR_EQUAL_UINT32(8U, strlen(password));
+}
+
+TEST_CASE("derived warehouse identity replaces legacy independent values",
+          "[gateway][config][migration]")
+{
+    gateway_config_t config = mqtt_identity("kho-01", "Kho 01");
+    strlcpy(config.gateway_id, "GW-01", sizeof(config.gateway_id));
+    TEST_ASSERT_TRUE(gateway_config_derive_warehouse_identity(&config));
+    TEST_ASSERT_EQUAL_STRING("gw-01", config.warehouse_id);
+    TEST_ASSERT_EQUAL_STRING("GW-01", config.warehouse_name);
+    /* Identity derivation is isolated from warehouse_v3 / position data. */
+    TEST_ASSERT_EQUAL_STRING("aubot", config.company_id);
+    TEST_ASSERT_EQUAL_STRING("ha-noi", config.site_id);
 }
 
 TEST_CASE("MQTT topics match the warehouse sensor namespace", "[gateway][mqtt][topic]")
@@ -328,7 +465,7 @@ TEST_CASE("invalid MQTT identity cannot build topics", "[gateway][mqtt][topic]")
 
 TEST_CASE("MQTT two-bit codec covers all states in eight slots", "[gateway][mqtt][status]")
 {
-    warehouse_snapshot_t snapshot = status_snapshot(LASER_PROFILE_GROUP_8);
+    warehouse_snapshot_t snapshot = status_snapshot(LASER_PROFILE_GROUP_12);
     configure_status_position(&snapshot, 0U, WAREHOUSE_STATE_EMPTY, true, true);
     configure_status_position(&snapshot, 1U, WAREHOUSE_STATE_OCCUPIED, true, true);
     /* Slot 3 is configured but offline: FAULT. */
@@ -376,7 +513,7 @@ TEST_CASE("MQTT two-bit codec preserves all twelve slots", "[gateway][mqtt][stat
 
 TEST_CASE("MQTT JSON and raw bits describe one identical snapshot", "[gateway][mqtt][status]")
 {
-    warehouse_snapshot_t snapshot = status_snapshot(LASER_PROFILE_GROUP_8);
+    warehouse_snapshot_t snapshot = status_snapshot(LASER_PROFILE_GROUP_12);
     configure_status_position(&snapshot, 0U, WAREHOUSE_STATE_EMPTY, true, true);
     configure_status_position(&snapshot, 1U, WAREHOUSE_STATE_OCCUPIED, true, true);
     configure_status_position(&snapshot, 2U, WAREHOUSE_STATE_EMPTY, true, false);
@@ -414,7 +551,7 @@ TEST_CASE("MQTT JSON and raw bits describe one identical snapshot", "[gateway][m
 
 TEST_CASE("MQTT status rejects invalid snapshot shape and short buffers", "[gateway][mqtt][status]")
 {
-    warehouse_snapshot_t invalid = status_snapshot(LASER_PROFILE_GROUP_8);
+    warehouse_snapshot_t invalid = status_snapshot(LASER_PROFILE_GROUP_12);
     invalid.group_count = 7U;
     char bits[GATEWAY_MQTT_STATUS_BITS_MAX + 1U];
     size_t length = 99U;
@@ -422,7 +559,7 @@ TEST_CASE("MQTT status rejects invalid snapshot shape and short buffers", "[gate
         bits, sizeof(bits), &invalid, &length));
     TEST_ASSERT_EQUAL_size_t(0U, length);
 
-    warehouse_snapshot_t snapshot = status_snapshot(LASER_PROFILE_GROUP_8);
+    warehouse_snapshot_t snapshot = status_snapshot(LASER_PROFILE_GROUP_12);
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_SIZE, gateway_mqtt_status_bits(
         bits, 15U, &snapshot, &length));
     TEST_ASSERT_EQUAL_size_t(0U, length);

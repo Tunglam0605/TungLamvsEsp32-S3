@@ -21,7 +21,9 @@
 #include "warehouse_manager.h"
 
 #define MQTT_POLL_MS 100U
-#define MQTT_LEGACY_CLEAR_ACK_TIMEOUT_MS 1000U
+#define MQTT_RETAINED_CLEAR_ACK_TIMEOUT_MS 1000U
+#define MQTT_RETAINED_CLEAR_MAX 3U
+#define MQTT_PUBLISHED_HISTORY_SIZE 8U
 #define MQTT_RECONFIGURE_WAIT_MS 4000U
 #define MQTT_RECONFIGURE_REQUEST_BIT BIT0
 #define MQTT_RECONFIGURE_DONE_BIT BIT1
@@ -34,10 +36,13 @@ static SemaphoreHandle_t s_reconfigure_lock;
 static EventGroupHandle_t s_control_events;
 static volatile bool s_connected;
 static volatile bool s_snapshot_requested;
-static volatile int s_legacy_clear_msg_id = -1;
-static volatile int s_last_published_msg_id = -1;
-static volatile uint32_t s_published_event_count;
-static volatile bool s_legacy_clear_acked;
+static volatile bool s_pending_cleanup_requested;
+static portMUX_TYPE s_publish_event_mux = portMUX_INITIALIZER_UNLOCKED;
+static uint32_t s_published_event_count;
+static int s_published_msg_history[MQTT_PUBLISHED_HISTORY_SIZE];
+static int s_retained_clear_msg_ids[MQTT_RETAINED_CLEAR_MAX];
+static bool s_retained_clear_acked[MQTT_RETAINED_CLEAR_MAX];
+static size_t s_retained_clear_count;
 static uint32_t s_sequence;
 static char s_uri[128];
 static char s_client_id[64];
@@ -99,6 +104,92 @@ static int enqueue_legacy_availability_clear(
                                    1, true, true);
 }
 
+static int enqueue_retained_clear(esp_mqtt_client_handle_t client,
+                                  const char *topic)
+{
+    if (client == NULL || topic == NULL || topic[0] == '\0') return -1;
+    return esp_mqtt_client_enqueue(client, topic, "", 0,
+                                   1, true, true);
+}
+
+static uint32_t published_event_count(void)
+{
+    uint32_t count;
+    portENTER_CRITICAL(&s_publish_event_mux);
+    count = s_published_event_count;
+    portEXIT_CRITICAL(&s_publish_event_mux);
+    return count;
+}
+
+static bool register_retained_clear(int message_id, uint32_t published_before)
+{
+    if (message_id < 0) return false;
+
+    bool registered = false;
+    portENTER_CRITICAL(&s_publish_event_mux);
+    if (s_retained_clear_count < MQTT_RETAINED_CLEAR_MAX) {
+        const size_t slot = s_retained_clear_count++;
+        s_retained_clear_msg_ids[slot] = message_id;
+        s_retained_clear_acked[slot] = false;
+
+        const uint32_t published_now = s_published_event_count;
+        uint32_t event_count = published_now - published_before;
+        if (event_count > MQTT_PUBLISHED_HISTORY_SIZE) {
+            event_count = MQTT_PUBLISHED_HISTORY_SIZE;
+        }
+        const uint32_t first = published_now - event_count;
+        for (uint32_t offset = 0; offset < event_count; ++offset) {
+            const uint32_t sequence = first + offset;
+            if (s_published_msg_history[
+                    sequence % MQTT_PUBLISHED_HISTORY_SIZE] == message_id) {
+                s_retained_clear_acked[slot] = true;
+                break;
+            }
+        }
+        registered = true;
+    }
+    portEXIT_CRITICAL(&s_publish_event_mux);
+    return registered;
+}
+
+static size_t retained_clear_ack_count(size_t *total)
+{
+    size_t acknowledged = 0;
+    portENTER_CRITICAL(&s_publish_event_mux);
+    const size_t count = s_retained_clear_count;
+    for (size_t i = 0; i < count; ++i) {
+        if (s_retained_clear_acked[i]) ++acknowledged;
+    }
+    portEXIT_CRITICAL(&s_publish_event_mux);
+    if (total != NULL) *total = count;
+    return acknowledged;
+}
+
+static bool retained_clear_message_acked(int message_id)
+{
+    bool acknowledged = false;
+    portENTER_CRITICAL(&s_publish_event_mux);
+    for (size_t i = 0; i < s_retained_clear_count; ++i) {
+        if (s_retained_clear_msg_ids[i] == message_id) {
+            acknowledged = s_retained_clear_acked[i];
+            break;
+        }
+    }
+    portEXIT_CRITICAL(&s_publish_event_mux);
+    return acknowledged;
+}
+
+static void reset_retained_clear_tracking(void)
+{
+    portENTER_CRITICAL(&s_publish_event_mux);
+    s_retained_clear_count = 0;
+    for (size_t i = 0; i < MQTT_RETAINED_CLEAR_MAX; ++i) {
+        s_retained_clear_msg_ids[i] = -1;
+        s_retained_clear_acked[i] = false;
+    }
+    portEXIT_CRITICAL(&s_publish_event_mux);
+}
+
 static void publish_snapshot(void)
 {
     warehouse_snapshot_t snapshot;
@@ -138,13 +229,28 @@ static void mqtt_event(void *argument, esp_event_base_t base, int32_t event_id,
                                               &s_active_config) < 0) {
             ESP_LOGW(TAG, "Cannot enqueue legacy retained availability cleanup");
         }
+        /* A retained namespace migration may have survived a reboot.  Attempt
+         * it once per connection (not every 100 ms task poll); the persistent
+         * marker remains for the next reconnect if either status PUBACK is
+         * missing.  The bounded wait runs on the MQTT owner task, outside this
+         * event callback. */
+        gateway_config_t pending_identity;
+        s_pending_cleanup_requested =
+            gateway_config_get_pending_mqtt_identity(&pending_identity);
         s_snapshot_requested = true;
         ESP_LOGI(TAG, "MQTT connected; synchronized status pending: %s | %s",
                  s_topics.status_json, s_topics.status_bits);
     } else if (event_id == MQTT_EVENT_PUBLISHED) {
-        s_last_published_msg_id = event->msg_id;
-        ++s_published_event_count;
-        if (event->msg_id == s_legacy_clear_msg_id) s_legacy_clear_acked = true;
+        portENTER_CRITICAL(&s_publish_event_mux);
+        const uint32_t sequence = s_published_event_count++;
+        s_published_msg_history[
+            sequence % MQTT_PUBLISHED_HISTORY_SIZE] = event->msg_id;
+        for (size_t i = 0; i < s_retained_clear_count; ++i) {
+            if (s_retained_clear_msg_ids[i] == event->msg_id) {
+                s_retained_clear_acked[i] = true;
+            }
+        }
+        portEXIT_CRITICAL(&s_publish_event_mux);
     } else if (event_id == MQTT_EVENT_DISCONNECTED) {
         s_connected = false;
         ESP_LOGW(TAG, "MQTT disconnected; CAN and warehouse remain active");
@@ -156,8 +262,7 @@ static void mqtt_event(void *argument, esp_event_base_t base, int32_t event_id,
 static void destroy_transport_locked(void)
 {
     s_connected = false;
-    s_legacy_clear_msg_id = -1;
-    s_legacy_clear_acked = false;
+    reset_retained_clear_tracking();
     if (s_client != NULL) {
         (void)esp_mqtt_client_stop(s_client);
         (void)esp_mqtt_client_destroy(s_client);
@@ -165,39 +270,106 @@ static void destroy_transport_locked(void)
     }
 }
 
-static void clear_old_legacy_availability_locked(void)
+static bool status_topic_paths_differ(const gateway_config_t *old_config,
+                                      const gateway_config_t *next_config,
+                                      gateway_topic_set_t *old_topics)
+{
+    gateway_topic_set_t previous_topics;
+    gateway_topic_set_t next_topics;
+    if (old_config == NULL || next_config == NULL ||
+        gateway_topic_build_set(old_config, &previous_topics) != ESP_OK ||
+        gateway_topic_build_set(next_config, &next_topics) != ESP_OK) {
+        /* Do not erase a valid retained snapshot when the replacement
+         * identity cannot produce valid topics. */
+        return false;
+    }
+    if (old_topics != NULL) *old_topics = previous_topics;
+    return strcmp(next_topics.status_json, previous_topics.status_json) != 0 ||
+           strcmp(next_topics.status_bits, previous_topics.status_bits) != 0;
+}
+
+static void clear_old_retained_topics_locked(
+    const gateway_config_t *next_config)
 {
     if (s_client == NULL || !s_connected ||
         !gateway_identity_valid(&s_active_config)) {
         return;
     }
 
-    s_legacy_clear_acked = false;
-    s_legacy_clear_msg_id = -1;
-    const uint32_t published_before = s_published_event_count;
-    const int message_id = enqueue_legacy_availability_clear(
-        s_client, &s_active_config);
-    if (message_id < 0) {
-        ESP_LOGW(TAG, "Cannot enqueue old legacy availability cleanup");
-        return;
+    gateway_config_t old_identity;
+    bool pending_identity =
+        gateway_config_get_pending_mqtt_identity(&old_identity);
+    gateway_topic_set_t old_topics = {0};
+    bool clear_old_status = pending_identity &&
+        status_topic_paths_differ(&old_identity, next_config, &old_topics);
+
+    if (!pending_identity &&
+        status_topic_paths_differ(&s_active_config, next_config, &old_topics)) {
+        /* Defensive same-boot fallback.  Normally gateway_config_save()
+         * persists s_active_config as the pending identity before requesting
+         * this reconfiguration. */
+        old_identity = s_active_config;
+        clear_old_status = true;
     }
-    s_legacy_clear_msg_id = message_id;
-    if (s_published_event_count != published_before &&
-        s_last_published_msg_id == message_id) {
-        s_legacy_clear_acked = true;
+
+    reset_retained_clear_tracking();
+    const gateway_config_t *legacy_identity =
+        clear_old_status ? &old_identity : &s_active_config;
+
+    uint32_t published_before = published_event_count();
+    const int availability_message_id = enqueue_legacy_availability_clear(
+        s_client, legacy_identity);
+    if (!register_retained_clear(availability_message_id, published_before)) {
+        ESP_LOGW(TAG, "Cannot enqueue old legacy availability cleanup");
+    }
+
+    int json_message_id = -1;
+    int bits_message_id = -1;
+    if (clear_old_status) {
+        published_before = published_event_count();
+        json_message_id = enqueue_retained_clear(s_client,
+                                                  old_topics.status_json);
+        if (!register_retained_clear(json_message_id, published_before)) {
+            ESP_LOGW(TAG, "Cannot enqueue old retained JSON status cleanup");
+        }
+
+        published_before = published_event_count();
+        bits_message_id = enqueue_retained_clear(s_client,
+                                                  old_topics.status_bits);
+        if (!register_retained_clear(bits_message_id, published_before)) {
+            ESP_LOGW(TAG, "Cannot enqueue old retained bits status cleanup");
+        }
+        ESP_LOGI(TAG, "Clearing retained status for old identity: %s | %s",
+                 old_topics.status_json, old_topics.status_bits);
     }
 
     const int64_t deadline_us = esp_timer_get_time() +
-        ((int64_t)MQTT_LEGACY_CLEAR_ACK_TIMEOUT_MS * 1000LL);
-    while (!s_legacy_clear_acked && s_connected &&
+        ((int64_t)MQTT_RETAINED_CLEAR_ACK_TIMEOUT_MS * 1000LL);
+    size_t total = 0;
+    size_t acknowledged = retained_clear_ack_count(&total);
+    while (acknowledged < total && s_connected &&
            esp_timer_get_time() < deadline_us) {
         vTaskDelay(pdMS_TO_TICKS(10));
+        acknowledged = retained_clear_ack_count(&total);
     }
-    if (!s_legacy_clear_acked) {
-        ESP_LOGW(TAG, "Timed out waiting for legacy availability cleanup PUBACK");
+    if (acknowledged < total) {
+        ESP_LOGW(TAG, "Timed out waiting for retained cleanup PUBACKs (%u/%u)",
+                 (unsigned)acknowledged, (unsigned)total);
     }
-    s_legacy_clear_msg_id = -1;
-    s_legacy_clear_acked = false;
+    const bool availability_cleared = availability_message_id >= 0 &&
+        retained_clear_message_acked(availability_message_id);
+    const bool status_cleared = !clear_old_status ||
+        (json_message_id >= 0 && bits_message_id >= 0 &&
+         retained_clear_message_acked(json_message_id) &&
+         retained_clear_message_acked(bits_message_id));
+    if (pending_identity && availability_cleared && status_cleared) {
+        const esp_err_t error = gateway_config_clear_pending_mqtt_identity();
+        if (error != ESP_OK) {
+            ESP_LOGW(TAG, "Cannot persist retained status cleanup: %s",
+                     esp_err_to_name(error));
+        }
+    }
+    reset_retained_clear_tracking();
 }
 
 static bool prepare_topics_locked(const gateway_config_t *config)
@@ -308,13 +480,17 @@ static void mqtt_task(void *argument)
             /* MQTT init/destroy needs considerably more stack than the HTTP
              * apply worker owns.  Keep the whole transport lifecycle on this
              * dedicated 12 KiB task to avoid corrupting the heap. */
-            clear_old_legacy_availability_locked();
+            clear_old_retained_topics_locked(&config);
             destroy_transport_locked();
         }
         if (!gateway_network_production_available() && s_client != NULL) {
             destroy_transport_locked();
         }
         connect_locked();
+        if (s_connected && s_pending_cleanup_requested) {
+            s_pending_cleanup_requested = false;
+            clear_old_retained_topics_locked(&config);
+        }
         const bool display_identity_changed = refresh_display_identity_locked(&config);
         bool changed = display_identity_changed ||
                        (previous_valid && current.profile != previous.profile);
