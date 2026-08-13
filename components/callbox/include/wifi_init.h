@@ -67,6 +67,9 @@ esp_err_t wifi_init_apsta(const char *ssid, const char *password,
 esp_err_t wifi_init_sta_profiles(const Config_t *config,
                                  const char *ap_ssid, const char *ap_password);
 
+/** Strict recovery path: start only SoftAP; do not create the STA selector. */
+esp_err_t wifi_init_recovery_ap(const char *ap_ssid, const char *ap_password);
+
 /** Áp dụng profile station vừa lưu mà không cần khởi động lại thiết bị. */
 esp_err_t wifi_apply_config(const Config_t *config);
 

@@ -79,6 +79,7 @@ static Config_t *s_config = NULL;
 
 /* Handle của HTTP server (một lần duy nhất; gọi lại chỉ trả ESP_OK) */
 static httpd_handle_t s_server = NULL;
+static bool s_recovery_mode;
 
 #define PORTAL_SCAN_MAX_RESULTS 32
 #define PORTAL_HTTP_BODY_TIMEOUTS_MAX 1
@@ -621,6 +622,11 @@ static esp_err_t send_login_rate_limit_page(httpd_req_t *req, uint32_t retry_aft
 static esp_err_t wifi_scan_handler(httpd_req_t *req)
 {
     if (!require_portal_access(req)) return ESP_OK;
+    if (s_recovery_mode) {
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        httpd_resp_sendstr(req, "WiFi scan is disabled in recovery mode; save settings and wait for automatic restart");
+        return ESP_OK;
+    }
     /* Never hold the sole HTTP worker waiting for a background scan. */
     if (!wifi_scan_lock(0)) {
         ESP_LOGW(TAG, "WiFi scan busy; portal remains responsive");
@@ -886,8 +892,14 @@ static esp_err_t wifi_profile_delete_handler(httpd_req_t *req)
         return ESP_OK;
     }
     *s_config = updated;
-    /* Áp dụng WiFi ngay để loại mạng vừa xóa ra khỏi lựa chọn kết nối */
-    (void)wifi_apply_config(&updated);
+    /* Recovery phải giữ đúng AP-only: vẫn cho phép xóa profile và
+     * persist NVS, nhưng không được chạm STA provider chưa được tạo.
+     * Full runtime sẽ nạp danh sách mới ở lần khởi động kế tiếp. */
+    if (!s_recovery_mode) {
+        (void)wifi_apply_config(&updated);
+    } else {
+        ESP_LOGW(TAG, "Recovery mode: deleted Wi-Fi profile persisted; runtime apply deferred");
+    }
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_sendstr(req, "{\"ok\":true}");
 }
@@ -1571,7 +1583,9 @@ static esp_err_t save_handler(httpd_req_t *req)
     const bool mqtt_changed = mqtt_runtime_config_changed(&previous, &updated);
     const bool portal_password_changed =
         strcmp(previous.web_password, updated.web_password) != 0;
-    if (wifi_changed) {
+    if (s_recovery_mode) {
+        ESP_LOGW(TAG, "Recovery mode: configuration persisted; runtime apply deferred to full boot");
+    } else if (wifi_changed) {
         esp_err_t apply_err = wifi_apply_config(&updated);
         if (apply_err != ESP_OK) {
             ESP_LOGW(TAG, "Configuration saved but Wi-Fi apply is pending: %s",
@@ -1581,12 +1595,20 @@ static esp_err_t save_handler(httpd_req_t *req)
     } else {
         ESP_LOGI(TAG, "Saved ID/MQTT settings; existing STA connection kept intact");
     }
-    if (mqtt_changed) {
-        mqtt_client_reconfigure(&updated);
-        ESP_LOGI(TAG, "MQTT endpoint, security, credentials or logical ID changed; reconnecting MQTT");
+    if (!s_recovery_mode && mqtt_changed) {
+        const esp_err_t mqtt_err = mqtt_client_reconfigure(&updated);
+        if (mqtt_err == ESP_OK) {
+            ESP_LOGI(TAG, "MQTT endpoint, security, credentials or logical ID changed; reconnecting MQTT");
+        } else {
+            /* NVS đã lưu thành công; runtime cũ có thể còn hoạt động. Không báo
+             * sai rằng endpoint mới đã được áp dụng khi lifecycle mutex timeout. */
+            ESP_LOGE(TAG, "MQTT configuration saved but runtime reconfigure failed: %s",
+                     esp_err_to_name(mqtt_err));
+        }
     }
-    if (strcmp(previous.sntp_primary, updated.sntp_primary) != 0 ||
-        strcmp(previous.sntp_fallback, updated.sntp_fallback) != 0) {
+    if (!s_recovery_mode &&
+        (strcmp(previous.sntp_primary, updated.sntp_primary) != 0 ||
+         strcmp(previous.sntp_fallback, updated.sntp_fallback) != 0)) {
         time_sync_reconfigure(&updated);
         ESP_LOGI(TAG, "SNTP servers updated without interrupting Wi-Fi or MQTT");
     }
@@ -1626,6 +1648,17 @@ esp_err_t config_portal_start(Config_t *config)
     server_config.stack_size = 8192;
     server_config.recv_wait_timeout = 2;
     server_config.send_wait_timeout = 2;
+    /* A commissioning browser may disappear without completing a TCP close
+     * (phone leaves the AP, laptop sleeps, cable/uplink changes).  Do not let
+     * such half-open sessions consume all HTTP slots indefinitely.  LRU
+     * eviction guarantees that a fresh maintenance connection can always
+     * replace the stalest one, while TCP keepalive reclaims dead peers even
+     * when no further HTTP request arrives. */
+    server_config.lru_purge_enable = true;
+    server_config.keep_alive_enable = true;
+    server_config.keep_alive_idle = 10;
+    server_config.keep_alive_interval = 5;
+    server_config.keep_alive_count = 3;
 
     esp_err_t err = httpd_start(&s_server, &server_config);
     if (err != ESP_OK) {
@@ -1725,4 +1758,10 @@ esp_err_t config_portal_start(Config_t *config)
 
     ESP_LOGI(TAG, "Configuration portal ready at http://%s/", CALLBOX_AP_IP_ADDR);
     return ESP_OK;
+}
+
+void config_portal_set_recovery_mode(bool enabled)
+{
+    /* Composition root sets this before AP_START can invoke start(). */
+    s_recovery_mode = enabled;
 }

@@ -71,6 +71,12 @@ i2c_master_bus_handle_t bsp_i2c_get_bus(void)
     return s_i2c_bus;
 }
 
+esp_err_t bsp_i2c_reset_bus(void)
+{
+    if (s_i2c_bus == NULL) return ESP_ERR_INVALID_STATE;
+    return i2c_master_bus_reset(s_i2c_bus);
+}
+
 esp_err_t bsp_i2c_deinit(void)
 {
     /* Idempotent: bus chưa tồn tại → coi như xong. */

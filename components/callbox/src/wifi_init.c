@@ -47,6 +47,7 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "health_monitor.h"
 #include "platform_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
@@ -134,19 +135,27 @@ static void connect_to_best_known_network(void *arg)
         return;
     }
 
+    health_monitor_check_in(HEALTH_TASK_WIFI_SELECT);
     while (1) {
+    /* Refresh ngay sau mỗi lần wake-up. Quét chủ động 40 kênh có thể
+     * mất gần 12 giây; không được cộng thêm chu kỳ delay 10 giây
+     * trước đó vào tuổi heartbeat, tránh watchdog dương giả. */
+    health_monitor_check_in(HEALTH_TASK_WIFI_SELECT);
     if (platform_wifi_sta_is_connected()) {
         /* Đã kết nối: chờ 10 s rồi kiểm tra lại */
+        health_monitor_check_in(HEALTH_TASK_WIFI_SELECT);
         vTaskDelay(pdMS_TO_TICKS(10000));
         continue;
     }
     if (s_scan_in_progress || platform_wifi_ap_client_count() > 0) {
         /* Đang quét hoặc có client AP → không phá mạng của người cấu hình */
+        health_monitor_check_in(HEALTH_TASK_WIFI_SELECT);
         vTaskDelay(pdMS_TO_TICKS(1000));
         continue;
     }
     /* Xin quyền quét duy nhất (portal có thể đang quét) */
     if (!wifi_scan_lock(1000)) {
+        health_monitor_check_in(HEALTH_TASK_WIFI_SELECT);
         vTaskDelay(pdMS_TO_TICKS(1000));
         continue;
     }
@@ -167,6 +176,7 @@ static void connect_to_best_known_network(void *arg)
          * trong trạng thái này; chờ chu kỳ quét sau. */
         s_scan_in_progress = 0;
         wifi_scan_unlock();
+        health_monitor_check_in(HEALTH_TASK_WIFI_SELECT);
         vTaskDelay(pdMS_TO_TICKS(1000));
         continue;
     }
@@ -195,6 +205,7 @@ static void connect_to_best_known_network(void *arg)
     }
     s_scan_in_progress = 0;
     wifi_scan_unlock();
+    health_monitor_check_in(HEALTH_TASK_WIFI_SELECT);
     vTaskDelay(pdMS_TO_TICKS(10000));
     }
 }
@@ -297,9 +308,36 @@ esp_err_t wifi_init_sta_profiles(const Config_t *config,
     (void)wifi_start_config_ap();
 
     /* Tạo task chọn mạng nền */
-    xTaskCreate(connect_to_best_known_network, "wifi_select", 4096, NULL, 5, NULL);
+    if (xTaskCreate(connect_to_best_known_network, "wifi_select", 4096, NULL,
+                    5, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "Cannot create Wi-Fi profile selection task");
+        return ESP_ERR_NO_MEM;
+    }
     ESP_LOGI(TAG, "Wi-Fi started in APSTA mode; local AP is available immediately");
     return ESP_OK;
+}
+
+esp_err_t wifi_init_recovery_ap(const char *ap_ssid, const char *ap_password)
+{
+    copy_string(s_ap_ssid, sizeof(s_ap_ssid),
+                ap_ssid && ap_ssid[0] ? ap_ssid : "CALLBOX-01");
+    copy_string(s_ap_password, sizeof(s_ap_password),
+                ap_password && ap_password[0] ? ap_password : s_ap_ssid);
+
+    if (!s_scan_mutex) {
+        s_scan_mutex = xSemaphoreCreateMutex();
+        if (!s_scan_mutex) return ESP_ERR_NO_MEM;
+    }
+
+    const platform_wifi_ap_config_t ap_config = {
+        .ssid = s_ap_ssid,
+        .password = s_ap_password,
+        .ip = CALLBOX_AP_IP_ADDR,
+        .netmask = CALLBOX_AP_NETMASK,
+        .channel = 1,
+        .max_clients = 4,
+    };
+    return platform_wifi_start_ap_only(&ap_config, on_platform_wifi_event, NULL);
 }
 
 void wifi_set_config_ap_callback(wifi_config_ap_callback_t callback)

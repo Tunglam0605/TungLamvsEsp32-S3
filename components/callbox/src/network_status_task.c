@@ -34,11 +34,13 @@
 
 #include "bsp_buzzer.h"
 #include "bsp_do.h"
+#include "bsp_eth.h"
 #include "callbox_io.h"
 #include "config_portal.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "health_monitor.h"
 #include "wifi_init.h"
 
 static const char *TAG = "NETWORK_STATUS";
@@ -99,6 +101,8 @@ static void network_status_task(void *arg)
     bool first = true;
     TickType_t sta_stable_since = 0;
 
+    health_monitor_check_in(HEALTH_TASK_NETWORK_STATUS);
+
     while (true) {
         if (s_rescue_ap_beep_request > 0) {
             s_rescue_ap_beep_request = 0;
@@ -155,6 +159,15 @@ static void network_status_task(void *arg)
         last_sta = sta;
         last_ap = ap;
         first = false;
+
+        /* BSP tự rate-limit phục hồi: DHCP renewal trước, chỉ restart
+         * W5500 sau nhiều lần thất bại và không reset khi rút dây. */
+        const esp_err_t eth_recovery = bsp_eth_recover_if_needed();
+        if (eth_recovery != ESP_OK && eth_recovery != ESP_ERR_INVALID_STATE) {
+            ESP_LOGW(TAG, "Ethernet recovery failed: %s", esp_err_to_name(eth_recovery));
+        }
+
+        health_monitor_check_in(HEALTH_TASK_NETWORK_STATUS);
         vTaskDelay(pdMS_TO_TICKS(200));
     }
 }

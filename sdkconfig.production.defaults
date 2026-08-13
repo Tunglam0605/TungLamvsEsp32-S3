@@ -2,6 +2,11 @@
 CONFIG_CALLBOX_PRODUCTION_BUILD=y
 # CONFIG_CALLBOX_ALLOW_ANONYMOUS_MQTT is not set
 
+# HTTP portal, MQTT and dual uplinks share the same lwIP descriptor table.
+# Keep production aligned with the soak-tested development profile; the old
+# generated production sdkconfig value of 10 could reproduce socket starvation.
+CONFIG_LWIP_MAX_SOCKETS=20
+
 CONFIG_SECURE_BOOT=y
 CONFIG_SECURE_BOOT_V2_ENABLED=y
 CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES=y

@@ -52,6 +52,16 @@ esp_err_t bsp_eth_init(void);
 bool bsp_eth_is_connected(void);
 void bsp_eth_get_status(bsp_eth_status_t *status);
 
+/**
+ * @brief Thử phục hồi đường Ethernet khi link vật lý vẫn còn nhưng DHCP/IP bị mất.
+ *
+ * Hàm có giới hạn tần suất nội bộ: bình thường chỉ khởi động lại DHCP client;
+ * sau nhiều lần liên tiếp không lấy lại IP mới restart driver W5500. Khi link
+ * đang down thật sự hàm không reset chip, nhờ đó dây bị rút không tạo reset loop.
+ * Có thể gọi định kỳ từ network supervisor.
+ */
+esp_err_t bsp_eth_recover_if_needed(void);
+
 #ifdef __cplusplus
 }
 #endif

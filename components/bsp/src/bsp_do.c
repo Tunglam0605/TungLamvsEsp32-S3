@@ -229,6 +229,40 @@ esp_err_t bsp_do_write_mask(uint8_t active_mask)
     return ret;
 }
 
+esp_err_t bsp_do_update_mask(uint8_t clear_mask, uint8_t set_mask)
+{
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (xSemaphoreTake(s_do_mutex, pdMS_TO_TICKS(BSP_DO_MUTEX_TIMEOUT_MS)) != pdTRUE) {
+        ESP_LOGW(TAG, "DO mutex timeout; skipping atomic mask update");
+        return ESP_ERR_TIMEOUT;
+    }
+
+    uint8_t active_mask = (uint8_t)~s_out_shadow;
+    active_mask &= (uint8_t)~clear_mask;
+    active_mask |= set_mask;
+    const uint8_t candidate = (uint8_t)~active_mask;
+    const esp_err_t ret = tca9554_write_outputs(&s_expander, candidate);
+    if (ret == ESP_OK) {
+        s_out_shadow = candidate;
+    }
+    xSemaphoreGive(s_do_mutex);
+    return ret;
+}
+
+esp_err_t bsp_do_recover_bus(void)
+{
+    if (!s_initialized || s_do_mutex == NULL) return ESP_ERR_INVALID_STATE;
+    if (xSemaphoreTake(s_do_mutex, pdMS_TO_TICKS(BSP_DO_MUTEX_TIMEOUT_MS)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    const esp_err_t ret = bsp_i2c_reset_bus();
+    xSemaphoreGive(s_do_mutex);
+    return ret;
+}
+
 uint8_t bsp_do_get_shadow(void)
 {
     /* Pre-init fallback an toàn: 0xFF = mọi đầu ra OFF (active-low) —

@@ -4,6 +4,7 @@
 #include "button_gate.h"
 #include "callbox_mqtt.h"
 #include "io_handler.h"
+#include "health_monitor.h"
 #include "output_renderer.h"
 #include "network_link.h"
 #include "sequence_service.h"
@@ -25,6 +26,17 @@ static bool s_cancel_hold_consumed;
 static uint32_t s_cancel_hold_started_ms;
 
 #define CANCEL_RESCUE_HOLD_MS 5000U
+#define SYNC_RETRY_INITIAL_MS 5000U
+#define SYNC_RETRY_MAX_MS     300000U
+#define SYNC_RETRY_QUEUE_BUSY_MS 1000U
+#define TRANSACTION_QUEUE_BUSY_RETRY_MS 1000U
+#define STATE_MAX_BUTTON_EVENTS_PER_CYCLE 8U
+#define STATE_MAX_APP_EVENTS_PER_CYCLE    8U
+
+static uint32_t s_sync_retry_interval_ms;
+static bool s_sync_waiting_for_reconnect;
+static bool s_reconcile_after_transaction_timeout;
+static uint32_t s_active_session_epoch;
 
 static void begin_wcs_sync(void);
 
@@ -54,14 +66,19 @@ static const char *state_name(TaskState_t state)
 
 TaskState_t get_task_state(int task_id)
 {
-    return task_id >= 1 && task_id <= 2 ? status.Mission[task_id - 1] : TASK_IDLE;
+    if (task_id < 1 || task_id > 2) return TASK_IDLE;
+    callbox_status_t snapshot;
+    status_get_snapshot(&snapshot);
+    return snapshot.Mission[task_id - 1];
 }
 
 const char *get_task_state_str(int task_id) { return state_name(get_task_state(task_id)); }
 
 const char *get_comm_state_str(void)
 {
-    switch (status.CommState) {
+    callbox_status_t snapshot;
+    status_get_snapshot(&snapshot);
+    switch (snapshot.CommState) {
     case COMM_READY: return "ready";
     case COMM_SYNCING: return "syncing";
     default: return "offline";
@@ -102,35 +119,42 @@ static transition_decision_t transition_policy(protocol_command_type_t command,
 
 static void mission_set_state(int task_id, TaskState_t state, uint32_t timestamp)
 {
-    status_set_mission(task_id, state, timestamp);
     if (state == TASK_IDLE) {
-        status_clear_call(task_id);
-        status.CallSequence[task_id - 1] = 0;
+        /* Reset mission/call/cancel liên quan trong một critical section để
+         * heartbeat/output không quan sát tổ hợp trạng thái nửa cũ nửa mới. */
+        status_reset_mission(task_id, timestamp);
         memset(s_agv_id[task_id - 1], 0, sizeof(s_agv_id[0]));
-        if (status.Cancel.pending && status.CancelTarget == (uint8_t)task_id) {
-            status_clear_cancel();
-        }
+    } else {
+        status_set_mission(task_id, state, timestamp);
     }
     ESP_LOGI(TAG, "Task %d -> %s", task_id, state_name(state));
 }
 
-static bool task_cancelable(int task_id)
-{
-    const TaskState_t state = get_task_state(task_id);
-    return state == TASK_QUEUED || state == TASK_ASSIGNED;
-}
-
 static void request_call(int task_id, uint32_t timestamp)
 {
-    if (status.CommState != COMM_READY || !network_link_is_connected() || !mqtt_is_connected() || status.Cancel.pending ||
-        get_task_state(task_id) != TASK_IDLE || status.Call[task_id - 1].pending) {
+    callbox_status_t snapshot;
+    status_get_snapshot(&snapshot);
+    const bool cancel_blocks_this_task = snapshot.Cancel.pending &&
+                                         snapshot.CancelTarget == (uint8_t)task_id;
+    if (snapshot.CommState != COMM_READY || !network_link_is_connected() ||
+        !mqtt_is_connected() || cancel_blocks_this_task ||
+        snapshot.Mission[task_id - 1] != TASK_IDLE ||
+        snapshot.Call[task_id - 1].pending) {
         ESP_LOGI(TAG, "CALL task %d rejected by admission conditions", task_id);
         return;
     }
     uint32_t sequence;
     if (sequence_next(&sequence) != ESP_OK) return;
-    status_start_call(task_id, sequence, mission_now_ms(), timestamp);
-    mqtt_publish_call(task_id, sequence, timestamp);
+    const uint32_t now_ms = mission_now_ms();
+    status_start_call(task_id, sequence, now_ms, timestamp);
+    if (!mqtt_publish_call(task_id, sequence, timestamp)) {
+        /* Adapter chưa nhận bản tin (queue/outbox đang bận): giữ transaction
+         * cùng seq nhưng thử sớm, không tính đây là một lần retry đã gửi. */
+        (void)status_schedule_call_retry_if_matches(
+            task_id, sequence, now_ms + TRANSACTION_QUEUE_BUSY_RETRY_MS);
+        ESP_LOGW(TAG, "CALL task %d seq=%lu waiting for MQTT TX capacity",
+                 task_id, (unsigned long)sequence);
+    }
     /* Trạng thái pending chỉ là cục bộ; Mission vẫn IDLE cho tới khi WCS
      * chấp nhận. */
     status_request_feedback(OUTPUT_FEEDBACK_CALL_REQUESTED);
@@ -139,11 +163,17 @@ static void request_call(int task_id, uint32_t timestamp)
 
 static void request_cancel(uint32_t timestamp)
 {
-    if (status.CommState != COMM_READY || status.Cancel.pending ||
+    callbox_status_t snapshot;
+    status_get_snapshot(&snapshot);
+    if (snapshot.CommState != COMM_READY || snapshot.Cancel.pending ||
         !network_link_is_connected() || !mqtt_is_connected()) return;
     int target = 0;
     for (int task = 1; task <= 2; ++task) {
-        if (task_cancelable(task) && (!target || status.CallSequence[task - 1] > status.CallSequence[target - 1])) {
+        const TaskState_t task_state = snapshot.Mission[task - 1];
+        const bool cancelable = task_state == TASK_QUEUED || task_state == TASK_ASSIGNED;
+        if (cancelable &&
+            (!target || snapshot.CallSequence[task - 1] >
+                            snapshot.CallSequence[target - 1])) {
             target = task;
         }
     }
@@ -155,8 +185,14 @@ static void request_cancel(uint32_t timestamp)
     }
     uint32_t sequence;
     if (sequence_next(&sequence) != ESP_OK) return;
-    status_start_cancel(target, sequence, mission_now_ms(), timestamp);
-    mqtt_publish_cancel(target, sequence, timestamp);
+    const uint32_t now_ms = mission_now_ms();
+    status_start_cancel(target, sequence, now_ms, timestamp);
+    if (!mqtt_publish_cancel(target, sequence, timestamp)) {
+        (void)status_schedule_cancel_retry_if_matches(
+            target, sequence, now_ms + TRANSACTION_QUEUE_BUSY_RETRY_MS);
+        ESP_LOGW(TAG, "CANCEL task %d seq=%lu waiting for MQTT TX capacity",
+                 target, (unsigned long)sequence);
+    }
     ESP_LOGI(TAG, "CANCEL task %d pending seq=%lu", target, (unsigned long)sequence);
 }
 
@@ -166,17 +202,20 @@ void handle_button_press(int button_id, uint32_t timestamp)
     else if (button_id == 3) request_cancel(timestamp);
 }
 
-static bool command_matches_call(int task_id, uint32_t ref_seq)
+static bool command_matches_call(const callbox_status_t *snapshot,
+                                 int task_id, uint32_t ref_seq)
 {
-    return task_id >= 1 && task_id <= 2 && ref_seq != 0 &&
-           status.CallSequence[task_id - 1] == ref_seq;
+    return snapshot != NULL && task_id >= 1 && task_id <= 2 && ref_seq != 0 &&
+           snapshot->CallSequence[task_id - 1] == ref_seq;
 }
 
 static void handle_wcs_command(const protocol_command_t *cmd)
 {
     const int task = cmd->task;
+    callbox_status_t snapshot;
+    status_get_snapshot(&snapshot);
     if (cmd->type == PROTOCOL_CMD_SYNC) {
-        if (status.CommState != COMM_SYNCING || cmd->ref_seq != s_sync_sequence) {
+        if (snapshot.CommState != COMM_SYNCING || cmd->ref_seq != s_sync_sequence) {
             ESP_LOGW(TAG, "Ignoring unmatched sync ref=%lu", (unsigned long)cmd->ref_seq);
             return;
         }
@@ -191,23 +230,33 @@ static void handle_wcs_command(const protocol_command_t *cmd)
             const int sync_task = i + 1;
             const TaskState_t sync_state = cmd->sync_state[i] == TASK_COMPLETED
                                                ? TASK_IDLE : cmd->sync_state[i];
-            status_clear_call(sync_task);
-            status.CallSequence[i] = cmd->sync_call_seq[i];
+            status_reconcile_mission(sync_task, sync_state,
+                                     cmd->sync_call_seq[i], cmd->timestamp);
             strncpy(s_agv_id[i], cmd->sync_agv_id[i], sizeof(s_agv_id[i]) - 1);
             s_agv_id[i][sizeof(s_agv_id[i]) - 1] = '\0';
-            mission_set_state(sync_task, sync_state, cmd->timestamp);
+            ESP_LOGI(TAG, "Task %d -> %s (WCS sync)", sync_task,
+                     state_name(sync_state));
         }
         status_clear_cancel();
         status_set_tower_warning(0, TOWER_WARNING_NONE);
         memset(&s_sync_transaction, 0, sizeof(s_sync_transaction));
         s_sync_sequence = 0;
+        s_sync_waiting_for_reconnect = false;
         status_set_comm_state(COMM_READY);
         ESP_LOGI(TAG, "WCS sync accepted; Callbox ready");
         return;
     }
+    if (snapshot.CommState != COMM_READY) {
+        /* Lifecycle được ưu tiên hơn command trong queue. Command còn tồn từ
+         * phiên cũ hoặc tới trước sync snapshot không được phép mutate mission. */
+        ESP_LOGW(TAG, "Ignoring WCS cmd=%s while communication is %s",
+                 protocol_command_name(cmd->type), get_comm_state_str());
+        return;
+    }
     if (task < 1 || task > 2) return;
     if (cmd->type == PROTOCOL_CMD_CANCEL_ACK) {
-        if (!status.Cancel.pending || status.CancelTarget != task || cmd->ref_seq != status.Cancel.seq) {
+        if (!snapshot.Cancel.pending || snapshot.CancelTarget != task ||
+            cmd->ref_seq != snapshot.Cancel.seq) {
             ESP_LOGW(TAG, "Ignoring unmatched cancel_ack task=%d ref=%lu", task, (unsigned long)cmd->ref_seq);
             return;
         }
@@ -223,11 +272,11 @@ static void handle_wcs_command(const protocol_command_t *cmd)
      * CallSequence thôi sẽ âm thầm bỏ qua một cancel bị từ chối như
      * {type:"rejected", task:1, ref_seq:105, reason:"locked"}. */
     if (cmd->type == PROTOCOL_CMD_REJECTED) {
-        const bool rejects_call = status.Call[task - 1].pending &&
-                                  cmd->ref_seq == status.Call[task - 1].seq;
-        const bool rejects_cancel = status.Cancel.pending &&
-                                    status.CancelTarget == task &&
-                                    cmd->ref_seq == status.Cancel.seq;
+        const bool rejects_call = snapshot.Call[task - 1].pending &&
+                                  cmd->ref_seq == snapshot.Call[task - 1].seq;
+        const bool rejects_cancel = snapshot.Cancel.pending &&
+                                    snapshot.CancelTarget == task &&
+                                    cmd->ref_seq == snapshot.Cancel.seq;
         if (!rejects_call && !rejects_cancel) {
             ESP_LOGW(TAG, "Ignoring unmatched rejected task=%d ref=%lu", task,
                      (unsigned long)cmd->ref_seq);
@@ -264,13 +313,13 @@ static void handle_wcs_command(const protocol_command_t *cmd)
         return;
     }
 
-    if (!command_matches_call(task, cmd->ref_seq)) {
+    if (!command_matches_call(&snapshot, task, cmd->ref_seq)) {
         ESP_LOGW(TAG, "Ignoring stale WCS cmd task=%d ref=%lu", task, (unsigned long)cmd->ref_seq);
         return;
     }
-    const TaskState_t current = get_task_state(task);
+    const TaskState_t current = snapshot.Mission[task - 1];
     const transition_decision_t decision = transition_policy(
-        cmd->type, current, status.Call[task - 1].pending);
+        cmd->type, current, snapshot.Call[task - 1].pending);
     if (decision == TRANSITION_NOOP) {
         ESP_LOGI(TAG, "Ignoring duplicate WCS cmd=%s task=%d state=%s",
                  protocol_command_name(cmd->type), task, state_name(current));
@@ -283,16 +332,17 @@ static void handle_wcs_command(const protocol_command_t *cmd)
         return;
     }
     if (cmd->type == PROTOCOL_CMD_ACCEPTED) {
-        status_clear_call(task);
+        status_confirm_call(task, TASK_QUEUED, cmd->timestamp);
         status_clear_task_error(task);
         status_clear_tower_warning_for_task(task);
-        mission_set_state(task, TASK_QUEUED, cmd->timestamp);
+        ESP_LOGI(TAG, "Task %d -> %s", task, state_name(TASK_QUEUED));
     } else if (cmd->type == PROTOCOL_CMD_ASSIGNED) {
-        status_clear_call(task);
+        status_confirm_call(task, TASK_ASSIGNED, cmd->timestamp);
         status_clear_task_error(task);
         status_clear_tower_warning_for_task(task);
         strncpy(s_agv_id[task - 1], cmd->agv_id, sizeof(s_agv_id[0]) - 1);
-        mission_set_state(task, TASK_ASSIGNED, cmd->timestamp);
+        s_agv_id[task - 1][sizeof(s_agv_id[0]) - 1] = '\0';
+        ESP_LOGI(TAG, "Task %d -> %s", task, state_name(TASK_ASSIGNED));
         status_request_feedback(OUTPUT_FEEDBACK_TASK_ASSIGNED);
     } else if (cmd->type == PROTOCOL_CMD_LOCKED) {
         mission_set_state(task, TASK_LOCKED, cmd->timestamp);
@@ -306,101 +356,167 @@ static void handle_wcs_command(const protocol_command_t *cmd)
 
 static void begin_wcs_sync(void)
 {
-    uint32_t sequence;
     status_set_comm_state(COMM_SYNCING);
+    const uint32_t now_ms = mission_now_ms();
+
+    /* Một lần mất/kết nối lại transport không tạo giao dịch sync mới. Giữ cùng
+     * seq để WCS có thể khử trùng lặp và tránh commit NVS theo mỗi lần retry. */
+    if (s_sync_transaction.pending && s_sync_transaction.seq != 0U) {
+        if (s_sync_waiting_for_reconnect) {
+            if (mqtt_publish_sync_request(s_sync_transaction.seq,
+                                          s_sync_transaction.timestamp)) {
+                s_sync_transaction.retry_at_ms = now_ms + s_sync_retry_interval_ms;
+                s_sync_waiting_for_reconnect = false;
+            } else {
+                s_sync_transaction.retry_at_ms = now_ms + SYNC_RETRY_QUEUE_BUSY_MS;
+            }
+        }
+        ESP_LOGW(TAG, "WCS sync transaction remains seq=%lu after MQTT event",
+                 (unsigned long)s_sync_transaction.seq);
+        return;
+    }
+
+    uint32_t sequence;
     if (sequence_next(&sequence) != ESP_OK) {
         ESP_LOGE(TAG, "Cannot allocate sync sequence");
         status_set_comm_state(COMM_OFFLINE);
         return;
     }
     s_sync_sequence = sequence;
-    const uint32_t now_ms = mission_now_ms();
     s_sync_transaction.pending = true;
     s_sync_transaction.seq = sequence;
     s_sync_transaction.retry_count = 0;
-    s_sync_transaction.retry_at_ms = now_ms + MISSION_RETRY_INTERVAL_MS;
-    s_sync_transaction.deadline_ms = now_ms + MISSION_TRANSACTION_TIMEOUT_MS;
+    s_sync_retry_interval_ms = SYNC_RETRY_INITIAL_MS;
+    s_sync_waiting_for_reconnect = false;
+    s_sync_transaction.retry_at_ms = now_ms + s_sync_retry_interval_ms;
+    /* Sync không timeout thành giao dịch mới. WCS có thể hỏng nhiều giờ; Callbox
+     * ở COMM_SYNCING an toàn và retry có backoff với chính seq này. */
+    s_sync_transaction.deadline_ms = 0U;
     s_sync_transaction.timestamp = (uint32_t)time(NULL);
-    mqtt_publish_sync_request(sequence, s_sync_transaction.timestamp);
+    if (!mqtt_publish_sync_request(sequence, s_sync_transaction.timestamp)) {
+        s_sync_transaction.retry_at_ms = now_ms + SYNC_RETRY_QUEUE_BUSY_MS;
+    }
     ESP_LOGI(TAG, "Requested WCS mission sync seq=%lu", (unsigned long)sequence);
 }
 
 static void tick_sync(void)
 {
-    if (status.CommState != COMM_SYNCING || !s_sync_transaction.pending) return;
+    callbox_status_t snapshot;
+    status_get_snapshot(&snapshot);
+    if (snapshot.CommState != COMM_SYNCING || !s_sync_transaction.pending) return;
     const uint32_t now_ms = mission_now_ms();
-    if (time_reached(now_ms, s_sync_transaction.deadline_ms)) {
-        ESP_LOGW(TAG, "WCS sync seq=%lu timed out; requesting a fresh snapshot",
-                 (unsigned long)s_sync_transaction.seq);
-        memset(&s_sync_transaction, 0, sizeof(s_sync_transaction));
-        if (mqtt_is_connected()) begin_wcs_sync();
-    } else if (s_sync_transaction.retry_count < MISSION_MAX_RETRIES &&
-               time_reached(now_ms, s_sync_transaction.retry_at_ms) && mqtt_is_connected()) {
-        mqtt_publish_sync_request(s_sync_transaction.seq, s_sync_transaction.timestamp);
-        s_sync_transaction.retry_count++;
-        s_sync_transaction.retry_at_ms = now_ms + MISSION_RETRY_INTERVAL_MS;
-        ESP_LOGW(TAG, "WCS sync retry seq=%lu attempt=%u",
-                 (unsigned long)s_sync_transaction.seq, s_sync_transaction.retry_count);
+    if (!time_reached(now_ms, s_sync_transaction.retry_at_ms) || !mqtt_is_connected()) return;
+
+    if (!mqtt_publish_sync_request(s_sync_transaction.seq,
+                                   s_sync_transaction.timestamp)) {
+        /* Queue/outbox đang bận: không quay nóng và không tăng exponential
+         * backoff cho một bản tin chưa được adapter nhận. */
+        s_sync_transaction.retry_at_ms = now_ms + SYNC_RETRY_QUEUE_BUSY_MS;
+        return;
     }
+
+    if (s_sync_transaction.retry_count < UINT8_MAX) s_sync_transaction.retry_count++;
+    if (s_sync_retry_interval_ms < SYNC_RETRY_MAX_MS) {
+        const uint32_t doubled = s_sync_retry_interval_ms * 2U;
+        s_sync_retry_interval_ms = doubled < SYNC_RETRY_MAX_MS
+                                       ? doubled : SYNC_RETRY_MAX_MS;
+    }
+    s_sync_transaction.retry_at_ms = now_ms + s_sync_retry_interval_ms;
+    ESP_LOGW(TAG, "WCS silent; sync retry seq=%lu attempt=%u next=%lus",
+             (unsigned long)s_sync_transaction.seq, s_sync_transaction.retry_count,
+             (unsigned long)(s_sync_retry_interval_ms / 1000U));
 }
 
 static void publish_output_snapshot(void)
 {
+    callbox_status_t status_snapshot;
+    status_get_snapshot(&status_snapshot);
     const app_output_snapshot_t snapshot = {
-        .mission = { status.Mission[0], status.Mission[1] },
-        .call_pending = { status.Call[0].pending, status.Call[1].pending },
-        .cancel_pending = status.Cancel.pending,
-        .comm_state = status.CommState,
-        .tower_warning = status.TowerWarning,
-        .task_error_until_ms = { status.TaskErrorUntilMs[0], status.TaskErrorUntilMs[1] },
-        .cancel_ack_until_ms = status.CancelAckUntilMs,
-        .feedback = status.Feedback,
-        .feedback_generation = status.FeedbackGeneration,
+        .mission = { status_snapshot.Mission[0], status_snapshot.Mission[1] },
+        .call_pending = { status_snapshot.Call[0].pending,
+                          status_snapshot.Call[1].pending },
+        .cancel_pending = status_snapshot.Cancel.pending,
+        .comm_state = status_snapshot.CommState,
+        .tower_warning = status_snapshot.TowerWarning,
+        .task_error_until_ms = { status_snapshot.TaskErrorUntilMs[0],
+                                 status_snapshot.TaskErrorUntilMs[1] },
+        .cancel_ack_until_ms = status_snapshot.CancelAckUntilMs,
+        .feedback = status_snapshot.Feedback,
+        .feedback_generation = status_snapshot.FeedbackGeneration,
     };
     output_renderer_publish(&snapshot);
 }
 
-static void tick_transactions(void)
+static bool tick_transactions(void)
 {
     const uint32_t now_ms = mission_now_ms();
+    callbox_status_t snapshot;
+    status_get_snapshot(&snapshot);
 
     for (int task = 1; task <= 2; ++task) {
-        mission_transaction_t *const call = (mission_transaction_t *)&status.Call[task - 1];
+        const mission_transaction_t *const call = &snapshot.Call[task - 1];
         if (!call->pending) continue;
 
         if (time_reached(now_ms, call->deadline_ms)) {
             ESP_LOGW(TAG, "CALL task %d timed out seq=%lu after %u retries",
                      task, (unsigned long)call->seq, call->retry_count);
-            mission_set_state(task, TASK_IDLE, 0);
-            status_set_task_error(task, now_ms + 2000U);
-            status_request_feedback(OUTPUT_FEEDBACK_TRANSACTION_FAILED);
+            if (status_timeout_call_if_matches(task, call->seq, 0U)) {
+                memset(s_agv_id[task - 1], 0, sizeof(s_agv_id[0]));
+                status_set_task_error(task, now_ms + 2000U);
+                status_request_feedback(OUTPUT_FEEDBACK_TRANSACTION_FAILED);
+                /* ACK có thể đã thất lạc sau khi WCS commit CALL. Không ở lại
+                 * READY rồi cho phép một CALL mới dựa trên trạng thái local. */
+                s_reconcile_after_transaction_timeout = true;
+            }
         } else if (call->retry_count < MISSION_MAX_RETRIES &&
                    time_reached(now_ms, call->retry_at_ms) &&
                    network_link_is_connected() && mqtt_is_connected()) {
             /* Truyền lại cũng là một giao dịch: không bao giờ tiêu thụ seq
              * mới. */
-            mqtt_publish_call(task, call->seq, call->timestamp);
-            status_note_call_retry(task, now_ms + MISSION_RETRY_INTERVAL_MS);
-            ESP_LOGW(TAG, "CALL retry task %d seq=%lu attempt=%u",
-                     task, (unsigned long)call->seq, call->retry_count);
+            if (mqtt_publish_call(task, call->seq, call->timestamp)) {
+                if (status_note_call_retry_if_matches(
+                        task, call->seq, now_ms + MISSION_RETRY_INTERVAL_MS)) {
+                    ESP_LOGW(TAG, "CALL retry task %d seq=%lu attempt=%u",
+                             task, (unsigned long)call->seq,
+                             (unsigned)(call->retry_count + 1U));
+                }
+            } else {
+                (void)status_schedule_call_retry_if_matches(
+                    task, call->seq, now_ms + TRANSACTION_QUEUE_BUSY_RETRY_MS);
+            }
         }
     }
 
-    mission_transaction_t *const cancel = (mission_transaction_t *)&status.Cancel;
-    if (!cancel->pending) return;
+    const mission_transaction_t *const cancel = &snapshot.Cancel;
+    if (!cancel->pending) return s_reconcile_after_transaction_timeout;
     if (time_reached(now_ms, cancel->deadline_ms)) {
         ESP_LOGW(TAG, "CANCEL task %u timed out seq=%lu after %u retries",
-                 status.CancelTarget, (unsigned long)cancel->seq, cancel->retry_count);
-        status_clear_cancel();
-        status_request_feedback(OUTPUT_FEEDBACK_TRANSACTION_FAILED);
+                 snapshot.CancelTarget, (unsigned long)cancel->seq, cancel->retry_count);
+        if (status_clear_cancel_if_matches(snapshot.CancelTarget, cancel->seq)) {
+            status_request_feedback(OUTPUT_FEEDBACK_TRANSACTION_FAILED);
+            /* CANCEL cũng có thể đã được WCS commit nhưng ACK thất lạc. Khóa
+             * admission và xin snapshot authoritative trước thao tác kế tiếp. */
+            s_reconcile_after_transaction_timeout = true;
+        }
     } else if (cancel->retry_count < MISSION_MAX_RETRIES &&
                time_reached(now_ms, cancel->retry_at_ms) &&
                network_link_is_connected() && mqtt_is_connected()) {
-        mqtt_publish_cancel(status.CancelTarget, cancel->seq, cancel->timestamp);
-        status_note_cancel_retry(now_ms + MISSION_RETRY_INTERVAL_MS);
-        ESP_LOGW(TAG, "CANCEL retry task %u seq=%lu attempt=%u", status.CancelTarget,
-                 (unsigned long)cancel->seq, cancel->retry_count);
+        if (mqtt_publish_cancel(snapshot.CancelTarget, cancel->seq,
+                                cancel->timestamp)) {
+            if (status_note_cancel_retry_if_matches(
+                    snapshot.CancelTarget, cancel->seq,
+                    now_ms + MISSION_RETRY_INTERVAL_MS)) {
+                ESP_LOGW(TAG, "CANCEL retry task %u seq=%lu attempt=%u",
+                         snapshot.CancelTarget, (unsigned long)cancel->seq,
+                         (unsigned)(cancel->retry_count + 1U));
+            }
+        } else {
+            (void)status_schedule_cancel_retry_if_matches(
+                snapshot.CancelTarget, cancel->seq,
+                now_ms + TRANSACTION_QUEUE_BUSY_RETRY_MS);
+        }
     }
+    return s_reconcile_after_transaction_timeout;
 }
 
 void state_machine_init(void)
@@ -410,6 +526,10 @@ void state_machine_init(void)
     status_set_comm_state(COMM_OFFLINE);
     s_cancel_hold_active = false;
     s_cancel_hold_consumed = false;
+    s_sync_retry_interval_ms = SYNC_RETRY_INITIAL_MS;
+    s_sync_waiting_for_reconnect = false;
+    s_reconcile_after_transaction_timeout = false;
+    s_active_session_epoch = 0U;
     ESP_LOGI(TAG, "Mission Manager initialized (single business-state owner)");
 }
 
@@ -418,7 +538,7 @@ static void handle_button_event(const ButtonMsg_t *button)
     const bool accepted_press = button_gate_accept(button);
 
     if (button->button_id != 3) {
-        if (accepted_press && status.Button[button->button_id - 1].pressed_edge) {
+        if (accepted_press) {
             handle_button_press(button->button_id, button->timestamp);
         }
         return;
@@ -438,7 +558,9 @@ static void handle_button_event(const ButtonMsg_t *button)
 
 static void tick_cancel_rescue_hold(void)
 {
-    if (!s_cancel_hold_active || s_cancel_hold_consumed || !status.Button[2].level ||
+    callbox_status_t snapshot;
+    status_get_snapshot(&snapshot);
+    if (!s_cancel_hold_active || s_cancel_hold_consumed || !snapshot.Button[2].level ||
         !time_reached(mission_now_ms(), s_cancel_hold_started_ms + CANCEL_RESCUE_HOLD_MS)) {
         return;
     }
@@ -463,26 +585,64 @@ void state_machine_task(void *arg)
     ButtonMsg_t button;
     app_event_t event;
     QueueHandle_t button_queue = io_handler_get_button_event_queue();
+    health_monitor_check_in(HEALTH_TASK_STATE_MACHINE);
     while (true) {
-        while (xQueueReceive(button_queue, &button, 0) == pdTRUE) {
+        for (uint32_t count = 0; count < STATE_MAX_BUTTON_EVENTS_PER_CYCLE &&
+                                 xQueueReceive(button_queue, &button, 0) == pdTRUE;
+             ++count) {
             handle_button_event(&button);
         }
-        while (app_event_receive(&event, 0)) {
+        for (uint32_t count = 0; count < STATE_MAX_APP_EVENTS_PER_CYCLE &&
+                                 app_event_receive(&event, 0);
+             ++count) {
             if (event.type == APP_EVENT_WCS_COMMAND) {
-                handle_wcs_command(&event.command);
+                if (event.session_epoch != s_active_session_epoch ||
+                    event.session_epoch == 0U) {
+                    ESP_LOGW(TAG, "Ignoring stale WCS command epoch=%lu active=%lu",
+                             (unsigned long)event.session_epoch,
+                             (unsigned long)s_active_session_epoch);
+                } else {
+                    handle_wcs_command(&event.command);
+                }
             } else if (event.type == APP_EVENT_MQTT_CONNECTED) {
+                s_active_session_epoch = event.session_epoch;
+                /* Không purge mù tại đây: broker có thể gửi sync reply của
+                 * chính phiên mới ngay sau SUBACK, trước khi Mission Manager
+                 * đọc lifecycle latch. Epoch filter bên trên sẽ tự loại command
+                 * phiên cũ mà vẫn giữ command hợp lệ của phiên hiện tại. */
                 begin_wcs_sync();
             } else if (event.type == APP_EVENT_MQTT_DISCONNECTED) {
-                s_sync_sequence = 0;
-                memset(&s_sync_transaction, 0, sizeof(s_sync_transaction));
+                (void)app_event_queue_purge_commands();
+                /* Giữ sync transaction/seq trong RAM qua reconnect. Không cấp
+                 * sequence mới và không ghi NVS chỉ vì transport chập chờn. */
+                if (s_sync_transaction.pending) s_sync_waiting_for_reconnect = true;
                 status_set_comm_state(COMM_OFFLINE);
                 ESP_LOGW(TAG, "MQTT offline; button admission paused until WCS sync");
+            } else if (event.type == APP_EVENT_WCS_RESYNC_REQUIRED) {
+                if (event.session_epoch != s_active_session_epoch ||
+                    event.session_epoch == 0U) {
+                    ESP_LOGW(TAG, "Ignoring stale resync epoch=%lu active=%lu",
+                             (unsigned long)event.session_epoch,
+                             (unsigned long)s_active_session_epoch);
+                    continue;
+                }
+                const uint32_t purged = app_event_queue_purge_commands();
+                /* Nếu sync đang pending, buộc gửi lại ngay cùng seq thay vì
+                 * chờ hết backoff 300 giây; nếu READY, tạo một sync mới. */
+                if (s_sync_transaction.pending) s_sync_waiting_for_reconnect = true;
+                ESP_LOGE(TAG, "WCS command loss detected; purged %lu and resyncing",
+                         (unsigned long)purged);
+                begin_wcs_sync();
             }
         }
-        tick_transactions();
+        if (tick_transactions()) {
+            s_reconcile_after_transaction_timeout = false;
+            begin_wcs_sync();
+        }
         tick_sync();
         tick_cancel_rescue_hold();
         publish_output_snapshot();
+        health_monitor_check_in(HEALTH_TASK_STATE_MACHINE);
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 }

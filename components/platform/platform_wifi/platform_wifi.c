@@ -341,6 +341,72 @@ esp_err_t platform_wifi_start_apsta(const platform_wifi_sta_network_config_t *st
     return ESP_OK;
 }
 
+esp_err_t platform_wifi_start_ap_only(const platform_wifi_ap_config_t *ap_config,
+                                      platform_wifi_event_callback_t callback,
+                                      void *context)
+{
+    if (!ap_config) return ESP_ERR_INVALID_ARG;
+
+    copy_string(s_ap_ssid, sizeof(s_ap_ssid), ap_config->ssid);
+    copy_string(s_ap_password, sizeof(s_ap_password), ap_config->password);
+    copy_string(s_ap_ip, sizeof(s_ap_ip), ap_config->ip);
+    copy_string(s_ap_netmask, sizeof(s_ap_netmask), ap_config->netmask);
+    s_ap_channel = ap_config->channel ? ap_config->channel : 1;
+    s_ap_max_clients = ap_config->max_clients ? ap_config->max_clients
+                                               : PLATFORM_WIFI_MAX_AP_CLIENTS;
+    s_event_callback = callback;
+    s_event_context = context;
+
+    esp_err_t ret = esp_netif_init();
+    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) return ret;
+    ret = esp_event_loop_create_default();
+    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) return ret;
+
+    /* Recovery deliberately has no STA netif. Portal APIs remain truthful:
+     * STA status reports disconnected and Wi-Fi scan can be rejected/omitted. */
+    s_sta_netif = NULL;
+    s_ap_netif = esp_netif_create_default_wifi_ap();
+    if (!s_ap_netif) return ESP_ERR_NO_MEM;
+    ret = configure_ap_netif();
+    if (ret != ESP_OK) return ret;
+
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ret = esp_wifi_init(&cfg);
+    if (ret != ESP_OK && ret != ESP_ERR_WIFI_INIT_STATE) return ret;
+
+    esp_event_handler_instance_t instance_any_id;
+    ret = esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
+                                              &wifi_event_handler, NULL,
+                                              &instance_any_id);
+    if (ret != ESP_OK) return ret;
+
+    s_sta_connected = false;
+    s_ap_started = false;
+    s_ap_client_count = 0;
+    s_started = true;
+
+    wifi_config_t config = { 0 };
+    copy_string((char *)config.ap.ssid, sizeof(config.ap.ssid), s_ap_ssid);
+    copy_string((char *)config.ap.password, sizeof(config.ap.password), s_ap_password);
+    config.ap.ssid_len = strlen((char *)config.ap.ssid);
+    config.ap.channel = s_ap_channel;
+    config.ap.authmode = strlen((char *)config.ap.password) >= 8
+                             ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
+    config.ap.max_connection = s_ap_max_clients;
+    config.ap.pmf_cfg.required = false;
+
+    ret = esp_wifi_set_mode(WIFI_MODE_AP);
+    if (ret == ESP_OK) ret = esp_wifi_set_config(WIFI_IF_AP, &config);
+    if (ret == ESP_OK) ret = esp_wifi_start();
+    if (ret != ESP_OK && ret != ESP_ERR_WIFI_NOT_STOPPED) {
+        s_started = false;
+        return ret;
+    }
+
+    ESP_LOGW(TAG, "Wi-Fi provider started in strict AP-only recovery mode");
+    return ESP_OK;
+}
+
 esp_err_t platform_wifi_sta_set_credentials(const char *ssid, const char *password)
 {
     if (!ssid) return ESP_ERR_INVALID_ARG;

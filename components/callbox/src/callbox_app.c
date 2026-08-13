@@ -50,6 +50,7 @@
 #include "esp_log.h"
 #include "esp_err.h"
 #include "esp_mac.h"
+#include "esp_system.h"
 #include "callbox_config.h"
 #include "io_handler.h"
 #include "led_control.h"
@@ -61,13 +62,16 @@
 #include "callbox_config_store.h"
 #include "config_portal.h"
 #include "bsp_board.h"
+#include "bsp_do.h"
 #include "bsp_eth.h"
 #include "network_status_task.h"
 #include "sequence_service.h"
 #include "app_event_queue.h"
+#include "health_monitor.h"
 #include "time_sync.h"
 
 static const char *TAG = "MAIN";
+static volatile esp_err_t s_portal_start_result = ESP_ERR_INVALID_STATE;
 
 /* Cấu hình tổng — local của composition root (callbox_app). Không còn khai báo
  * toàn cục: mọi consumer nhận cấu hình tường minh (config store, wifi_init,
@@ -219,26 +223,99 @@ static void build_configuration_ap_identity(const char *callbox_id,
 static void start_config_portal_when_ap_is_ready(void)
 {
     esp_err_t ret = config_portal_start(&g_config);
+    s_portal_start_result = ret;
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Configuration portal start failed: %s", esp_err_to_name(ret));
     }
+}
+
+static esp_err_t wait_for_config_portal(uint32_t timeout_ms)
+{
+    const TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(timeout_ms);
+    do {
+        const esp_err_t result = s_portal_start_result;
+        if (result == ESP_OK) return ESP_OK;
+        if (result != ESP_ERR_INVALID_STATE) return result;
+        vTaskDelay(pdMS_TO_TICKS(20));
+    } while ((int32_t)(deadline - xTaskGetTickCount()) > 0);
+    return ESP_ERR_TIMEOUT;
+}
+
+/* Khởi tạo thất bại không được để thiết bị chạy zombie với
+ * một phần task/queue bị thiếu. Tắt output nếu BSP đã sẵn sàng,
+ * ghi nguyên nhân và restart sau khoảng ngắn. */
+static void boot_fail_restart(const char *stage, esp_err_t error, bool board_ready)
+{
+    ESP_LOGE(TAG, "Fatal startup failure at %s: %s; restarting",
+             stage, esp_err_to_name(error));
+    /* Tắt ngay các output nếu BSP đã sẵn sàng. Sau thời gian
+     * backoff xả log, tắt lần cuối ngay sát reset để một task đã
+     * khởi tạo dở dang không thể để lại DO bật. */
+    if (board_ready) (void)bsp_do_all_off();
+    vTaskDelay(pdMS_TO_TICKS(2000));
+    if (board_ready) {
+        const esp_err_t safe_err = bsp_do_all_off();
+        if (safe_err != ESP_OK) {
+            ESP_LOGE(TAG, "Cannot force outputs OFF after startup failure: %s",
+                     esp_err_to_name(safe_err));
+        }
+    }
+    health_monitor_force_restart(stage);
+}
+
+/* Recovery breaker: after repeated local crashes, keep only the commissioning
+ * path alive. No Mission/MQTT/output worker is created, so no stale business
+ * heartbeat can reset this intentionally reduced runtime. The health monitor
+ * clears the RTC streak and retries the full app after ten stable minutes. */
+static void run_recovery_portal(void)
+{
+    ESP_LOGE(TAG, "Repeated local failures detected; starting AP/WebUI recovery mode");
+
+    esp_err_t ret = nvs_storage_init();
+    if (ret != ESP_OK) boot_fail_restart("recovery_nvs", ret, false);
+    if (!load_config_from_nvs()) {
+        boot_fail_restart("recovery_config_load", ESP_FAIL, false);
+    }
+
+    char ap_ssid[33];
+    char ap_password[33];
+    build_configuration_ap_identity(g_config.callbox_id, ap_ssid, sizeof(ap_ssid),
+                                    ap_password, sizeof(ap_password));
+    s_portal_start_result = ESP_ERR_INVALID_STATE;
+    config_portal_set_recovery_mode(true);
+    wifi_set_config_ap_callback(start_config_portal_when_ap_is_ready);
+    ret = wifi_init_recovery_ap(ap_ssid, ap_password);
+    if (ret != ESP_OK) boot_fail_restart("recovery_wifi", ret, false);
+
+    ret = wait_for_config_portal(5000U);
+    if (ret != ESP_OK) boot_fail_restart("recovery_config_portal", ret, false);
+
+    ret = health_monitor_init(HEALTH_MONITOR_MODE_RECOVERY);
+    if (ret != ESP_OK) boot_fail_restart("recovery_health_monitor", ret, false);
+
+    ESP_LOGW(TAG, "Recovery AP + WebUI verified ready at http://%s/; STA/SNTP/ETH/MQTT/I/O disabled",
+             CALLBOX_AP_IP_ADDR);
+    for (;;) vTaskDelay(pdMS_TO_TICKS(60000));
 }
 
 void callbox_app_run(void)
 {
     ESP_LOGI(TAG, "Starting Callbox SEWS Application");
 
+    health_monitor_boot_begin();
+    if (health_monitor_recovery_requested()) run_recovery_portal();
+
     /* Bước 1: khởi tạo NVS (namespace "callbox"), chấp nhận erase khi hỏng */
     esp_err_t ret = nvs_storage_init();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize NVS: %s", esp_err_to_name(ret));
-        return;
+        boot_fail_restart("nvs_storage", ret, false);
     }
 
     /* Bước 2: nạp cấu hình đã lưu (hoặc factory default) vào g_config */
     if (!load_config_from_nvs()) {
         ESP_LOGE(TAG, "Configuration credential migration failed; startup stopped");
-        return;
+        boot_fail_restart("config_load", ESP_FAIL, false);
     }
 
     /* Việc cấp phát số thứ tự độc lập với Config_t. NVS chỉ là phương tiện
@@ -246,13 +323,13 @@ void callbox_app_run(void)
     ret = sequence_service_init();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Sequence service init failed: %s", esp_err_to_name(ret));
-        return;
+        boot_fail_restart("sequence_service", ret, false);
     }
 
     ret = app_event_queue_init();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Application event queue init failed: %s", esp_err_to_name(ret));
-        return;
+        boot_fail_restart("app_event_queue", ret, false);
     }
 
     /* Bước 3: chuẩn bị queue lệnh buzzer nghiệp vụ (chủ sở hữu: led_control).
@@ -261,7 +338,7 @@ void callbox_app_run(void)
     ret = led_control_prepare();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to create buzzer queue: %s", esp_err_to_name(ret));
-        return;
+        boot_fail_restart("led_control_prepare", ret, false);
     }
 
     ESP_LOGI(TAG, "Queues created successfully");
@@ -270,12 +347,16 @@ void callbox_app_run(void)
     esp_err_t board_ret = bsp_board_init();
     if (board_ret != ESP_OK) {
         ESP_LOGE(TAG, "BSP board init failed: %s", esp_err_to_name(board_ret));
+        boot_fail_restart("bsp_board", board_ret, false);
     }
 
     /* Bước 5: khởi tạo các lớp phần mềm (LED, I/O, máy trạng thái) */
-    led_control_init();
-    output_renderer_init();
-    io_handler_init();
+    ret = led_control_init();
+    if (ret != ESP_OK) boot_fail_restart("led_control", ret, true);
+    ret = output_renderer_init();
+    if (ret != ESP_OK) boot_fail_restart("output_renderer", ret, true);
+    ret = io_handler_init();
+    if (ret != ESP_OK) boot_fail_restart("io_handler", ret, true);
     state_machine_init();
     ESP_LOGI(TAG, "Hardware initialized");
 
@@ -285,6 +366,7 @@ void callbox_app_run(void)
     char ap_password[33];
     build_configuration_ap_identity(g_config.callbox_id, ap_ssid, sizeof(ap_ssid),
                                     ap_password, sizeof(ap_password));
+    config_portal_set_recovery_mode(false);
     wifi_set_config_ap_callback(start_config_portal_when_ap_is_ready);
     /* Nối thông báo Rescue AP (từ wifi_init) tới phản hồi mạng (GPIO46 của
      * network_status_task) — đảo ngược dependency: CallBox không biết main. */
@@ -292,6 +374,7 @@ void callbox_app_run(void)
     esp_err_t wifi_ret = wifi_init_sta_profiles(&g_config, ap_ssid, ap_password);
     if (wifi_ret != ESP_OK) {
         ESP_LOGE(TAG, "WiFi STA/AP init failed: %s", esp_err_to_name(wifi_ret));
+        boot_fail_restart("wifi_init", wifi_ret, true);
     }
     /* Chạy SNTP cho mọi chế độ mạng. Nó tự động thử lại tới khi có đường
      * mạng, để các sự kiện MQTT/TCP cũng nhận timestamp UTC thật thay vì
@@ -300,6 +383,7 @@ void callbox_app_run(void)
     esp_err_t status_ret = network_status_task_start();
     if (status_ret != ESP_OK) {
         ESP_LOGE(TAG, "Network status task start failed: %s", esp_err_to_name(status_ret));
+        boot_fail_restart("network_status", status_ret, true);
     }
     esp_err_t eth_ret = bsp_eth_init();
     if (eth_ret != ESP_OK) {
@@ -309,7 +393,8 @@ void callbox_app_run(void)
     vTaskDelay(pdMS_TO_TICKS(5000));
 
     /* Bước 7: khởi tạo MQTT (handshake CONTONT/SUBSCRIBE khi có mạng) */
-    mqtt_client_init(&g_config);
+    ret = mqtt_client_init(&g_config);
+    if (ret != ESP_OK) boot_fail_restart("mqtt_client", ret, true);
 
     /* Bước 8: tạo 3 task chính chạy song song:
      *   - io_handler: đọc nút (debounding) → publish vào queue
@@ -317,9 +402,21 @@ void callbox_app_run(void)
      *   - mqtt_comm: gửi HEARTBEAT + reconnect
      * MQTT event callback do ESP-MQTT sở hữu và chỉ đẩy app_event vào queue.
      * Độ ưu tiên: state(10) > mqtt_comm(8) > io(5). */
-    xTaskCreate(io_handler_task, "io_handler", 2048, NULL, 5, NULL);
-    xTaskCreate(state_machine_task, "state_machine", 3072, NULL, 10, NULL);
-    xTaskCreate(mqtt_communication_task, "mqtt_comm", 4096, NULL, 8, NULL);
+    if (xTaskCreate(io_handler_task, "io_handler", 2048, NULL, 5,
+                    NULL) != pdPASS) {
+        boot_fail_restart("io_handler_task", ESP_ERR_NO_MEM, true);
+    }
+    if (xTaskCreate(state_machine_task, "state_machine", 3072, NULL, 10,
+                    NULL) != pdPASS) {
+        boot_fail_restart("state_machine_task", ESP_ERR_NO_MEM, true);
+    }
+    if (xTaskCreate(mqtt_communication_task, "mqtt_comm", 4096, NULL, 8,
+                    NULL) != pdPASS) {
+        boot_fail_restart("mqtt_comm_task", ESP_ERR_NO_MEM, true);
+    }
+
+    ret = health_monitor_init(HEALTH_MONITOR_MODE_NORMAL);
+    if (ret != ESP_OK) boot_fail_restart("health_monitor", ret, true);
 
     ESP_LOGI(TAG, "All tasks created and running");
 

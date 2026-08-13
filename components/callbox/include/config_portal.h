@@ -33,6 +33,14 @@ extern "C" {
 /** Bắt đầu trang cấu hình điện thoại cục bộ trên web server AP+STA. */
 esp_err_t config_portal_start(Config_t *config);
 
+/**
+ * @brief Select reduced recovery behavior before starting the HTTP server.
+ *
+ * In recovery mode, configuration can be inspected/saved to NVS, but scan and
+ * runtime Wi-Fi/MQTT/SNTP apply are suppressed until the next full boot.
+ */
+void config_portal_set_recovery_mode(bool enabled);
+
 /** True khi còn một phiên cấu hình trình duyệt đang hoạt động. */
 bool config_portal_session_active(void);
 

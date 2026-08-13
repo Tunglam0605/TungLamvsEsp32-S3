@@ -14,6 +14,7 @@ endif()
 
 idf_component_register(SRCS "src/protocol_types.c"
                              "src/app_event_queue.c"
+                             "src/health_monitor.c"
                              "src/status.c"
                              "src/button_gate.c"
                              "src/callbox_config_store.c"

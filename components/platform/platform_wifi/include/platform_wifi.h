@@ -180,6 +180,16 @@ esp_err_t platform_wifi_start_apsta(const platform_wifi_sta_network_config_t *st
                                     void *context);
 
 /**
+ * @brief Initialize the provider in strict SoftAP-only recovery mode.
+ *
+ * Creates only the AP netif, DHCP server, Wi-Fi driver and AP event bridge.
+ * No STA netif, selector, scan or uplink connection is started.
+ */
+esp_err_t platform_wifi_start_ap_only(const platform_wifi_ap_config_t *ap_config,
+                                      platform_wifi_event_callback_t callback,
+                                      void *context);
+
+/**
  * @brief  Ghi nhớ credentials STA (SSID/password) cho lần kết nối sau.
  *
  *         Chỉ sao chép chuỗi vào storage tĩnh của platform; KHÔNG chạm driver.

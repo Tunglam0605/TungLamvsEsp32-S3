@@ -55,10 +55,22 @@ static const char *TAG = "BSP_ETH";
 #define BSP_ETH_SPI_HZ    (20 * 1000 * 1000)
 
 static esp_eth_handle_t s_eth_handle;
+static esp_netif_t *s_eth_netif;
 static bool s_eth_initialized;
+static bool s_eth_link_up;
 static bool s_eth_has_ip;
 static char s_eth_ip[16];
 static char s_eth_gateway[16];
+static TickType_t s_eth_ip_lost_at;
+static TickType_t s_eth_last_recovery_at;
+static uint8_t s_eth_recovery_attempts;
+
+/* Give DHCP enough time after link-up/lost-IP and rate-limit recovery.  A
+ * managed factory switch may legitimately take several seconds to unblock a
+ * port; immediate reset loops would make that situation worse. */
+#define BSP_ETH_RECOVERY_GRACE_MS       30000U
+#define BSP_ETH_RECOVERY_INTERVAL_MS    60000U
+#define BSP_ETH_DRIVER_RESTART_EVERY    3U
 
 /*
  * Validate the factory-derived address before exposing it to the LAN.  A
@@ -82,9 +94,14 @@ static void eth_event_handler(void *arg, esp_event_base_t event_base,
                               int32_t event_id, void *event_data)
 {
     if (event_id == ETHERNET_EVENT_CONNECTED) {
+        s_eth_link_up = true;
+        if (!s_eth_has_ip) s_eth_ip_lost_at = xTaskGetTickCount();
         ESP_LOGI(TAG, "W5500 link up");
     } else if (event_id == ETHERNET_EVENT_DISCONNECTED) {
+        s_eth_link_up = false;
         s_eth_has_ip = false;
+        s_eth_ip_lost_at = 0;
+        s_eth_recovery_attempts = 0;
         s_eth_ip[0] = '\0';
         s_eth_gateway[0] = '\0';
         ESP_LOGW(TAG, "W5500 link down");
@@ -100,9 +117,30 @@ static void eth_got_ip_handler(void *arg, esp_event_base_t event_base,
 {
     ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
     s_eth_has_ip = true;
+    s_eth_ip_lost_at = 0;
+    s_eth_recovery_attempts = 0;
     snprintf(s_eth_ip, sizeof(s_eth_ip), IPSTR, IP2STR(&event->ip_info.ip));
     snprintf(s_eth_gateway, sizeof(s_eth_gateway), IPSTR, IP2STR(&event->ip_info.gw));
     ESP_LOGI(TAG, "W5500 got IP: " IPSTR, IP2STR(&event->ip_info.ip));
+}
+
+/* The LOST_IP event can occur while the Ethernet carrier remains up (DHCP
+ * lease loss, switch/VLAN interruption).  Treat it separately from link-down
+ * so upper layers never keep using a stale "connected" flag. */
+static void eth_lost_ip_handler(void *arg, esp_event_base_t event_base,
+                                int32_t event_id, void *event_data)
+{
+    (void)arg;
+    (void)event_base;
+    (void)event_id;
+    (void)event_data;
+    s_eth_has_ip = false;
+    s_eth_ip[0] = '\0';
+    s_eth_gateway[0] = '\0';
+    if (s_eth_link_up && s_eth_ip_lost_at == 0) {
+        s_eth_ip_lost_at = xTaskGetTickCount();
+    }
+    ESP_LOGW(TAG, "W5500 lost IP while link=%s", s_eth_link_up ? "up" : "down");
 }
 
 /*
@@ -147,9 +185,14 @@ esp_err_t bsp_eth_init(void)
     bool driver_installed = false;
     bool eth_handler_registered = false;
     bool ip_handler_registered = false;
+    bool lost_ip_handler_registered = false;
     bool start_attempted = false;
 
     s_eth_has_ip = false;
+    s_eth_link_up = false;
+    s_eth_ip_lost_at = 0;
+    s_eth_last_recovery_at = 0;
+    s_eth_recovery_attempts = 0;
     s_eth_ip[0] = '\0';
     s_eth_gateway[0] = '\0';
 
@@ -253,6 +296,10 @@ esp_err_t bsp_eth_init(void)
                                                  eth_got_ip_handler, NULL), fail, TAG,
                       "register Ethernet IP handler");
     ip_handler_registered = true;
+    ESP_GOTO_ON_ERROR(esp_event_handler_register(IP_EVENT, IP_EVENT_ETH_LOST_IP,
+                                                 eth_lost_ip_handler, NULL), fail, TAG,
+                      "register Ethernet lost-IP handler");
+    lost_ip_handler_registered = true;
 
     /* BƯỚC 8 — Bắt đầu hoạt động Ethernet. */
     start_attempted = true;
@@ -260,6 +307,7 @@ esp_err_t bsp_eth_init(void)
 
     /* Chỉ công bố handle sau khi mọi bước khởi tạo đã thành công. */
     s_eth_handle = eth_handle;
+    s_eth_netif = netif;
     s_eth_initialized = true;
 
     ESP_LOGI(TAG, "W5500 initialized (SPI2: INT=%d MOSI=%d MISO=%d SCLK=%d CS=%d RST=%d)",
@@ -269,7 +317,9 @@ esp_err_t bsp_eth_init(void)
 
 fail:
     s_eth_handle = NULL;
+    s_eth_netif = NULL;
     s_eth_initialized = false;
+    s_eth_link_up = false;
     s_eth_has_ip = false;
     s_eth_ip[0] = '\0';
     s_eth_gateway[0] = '\0';
@@ -278,6 +328,14 @@ fail:
         const esp_err_t cleanup_err = esp_eth_stop(eth_handle);
         if (cleanup_err != ESP_OK && cleanup_err != ESP_ERR_INVALID_STATE) {
             ESP_LOGW(TAG, "rollback: stop W5500 failed: %s", esp_err_to_name(cleanup_err));
+        }
+    }
+    if (lost_ip_handler_registered) {
+        const esp_err_t cleanup_err = esp_event_handler_unregister(
+            IP_EVENT, IP_EVENT_ETH_LOST_IP, eth_lost_ip_handler);
+        if (cleanup_err != ESP_OK) {
+            ESP_LOGW(TAG, "rollback: unregister lost-IP handler failed: %s",
+                     esp_err_to_name(cleanup_err));
         }
     }
     if (ip_handler_registered) {
@@ -361,4 +419,49 @@ void bsp_eth_get_status(bsp_eth_status_t *status)
     status->connected = s_eth_has_ip;
     snprintf(status->ip, sizeof(status->ip), "%s", s_eth_ip);
     snprintf(status->gateway, sizeof(status->gateway), "%s", s_eth_gateway);
+}
+
+esp_err_t bsp_eth_recover_if_needed(void)
+{
+    if (!s_eth_initialized || !s_eth_handle || !s_eth_netif) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (!s_eth_link_up || s_eth_has_ip || s_eth_ip_lost_at == 0) {
+        return ESP_OK;
+    }
+
+    const TickType_t now = xTaskGetTickCount();
+    if ((now - s_eth_ip_lost_at) < pdMS_TO_TICKS(BSP_ETH_RECOVERY_GRACE_MS) ||
+        (s_eth_last_recovery_at != 0 &&
+         (now - s_eth_last_recovery_at) < pdMS_TO_TICKS(BSP_ETH_RECOVERY_INTERVAL_MS))) {
+        return ESP_OK;
+    }
+    s_eth_last_recovery_at = now;
+    ++s_eth_recovery_attempts;
+
+    esp_err_t stop_err = esp_netif_dhcpc_stop(s_eth_netif);
+    if (stop_err != ESP_OK && stop_err != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED) {
+        ESP_LOGW(TAG, "Ethernet recovery: stop DHCP failed: %s", esp_err_to_name(stop_err));
+    }
+    esp_err_t start_err = esp_netif_dhcpc_start(s_eth_netif);
+    if (start_err != ESP_OK && start_err != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STARTED) {
+        ESP_LOGW(TAG, "Ethernet recovery: start DHCP failed: %s", esp_err_to_name(start_err));
+    }
+
+    /* DHCP renewal is the least disruptive first aid.  Only every third
+     * failed interval restart the driver/PHY, and never do so on link-down. */
+    if ((s_eth_recovery_attempts % BSP_ETH_DRIVER_RESTART_EVERY) == 0U) {
+        ESP_LOGW(TAG, "Ethernet still has no IP; restarting W5500 driver (attempt=%u)",
+                 (unsigned)s_eth_recovery_attempts);
+        esp_err_t err = esp_eth_stop(s_eth_handle);
+        if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) return err;
+        vTaskDelay(pdMS_TO_TICKS(100));
+        err = esp_eth_start(s_eth_handle);
+        if (err != ESP_OK) return err;
+    } else {
+        ESP_LOGW(TAG, "Ethernet still has no IP; DHCP recovery attempt=%u",
+                 (unsigned)s_eth_recovery_attempts);
+    }
+    return (start_err == ESP_OK || start_err == ESP_ERR_ESP_NETIF_DHCP_ALREADY_STARTED)
+               ? ESP_OK : start_err;
 }

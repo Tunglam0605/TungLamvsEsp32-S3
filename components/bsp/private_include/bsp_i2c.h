@@ -54,6 +54,16 @@ esp_err_t bsp_i2c_init(void);
 i2c_master_bus_handle_t bsp_i2c_get_bus(void);
 
 /**
+ * @brief Phục hồi state machine phần cứng của bus I2C sau lỗi giao dịch.
+ *
+ * Hàm không tạo/xóa bus và không detach thiết bị con. ESP-IDF chỉ reset FSM
+ * controller cùng trạng thái busy nội bộ, vì vậy handle TCA9554 hiện tại vẫn
+ * hợp lệ. Caller phải tự giới hạn tần suất để tránh reset bus liên tục khi lỗi
+ * là phần cứng kéo SDA/SCL cố định.
+ */
+esp_err_t bsp_i2c_reset_bus(void);
+
+/**
  * @brief Đóng I2C bus của board.
  *
  * - s_i2c_bus == NULL → ESP_OK (idempotent, an toàn gọi nhiều lần).

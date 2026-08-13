@@ -8,6 +8,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include "esp_err.h"
 #include "mission_types.h"
 
 typedef struct {
@@ -22,7 +23,7 @@ typedef struct {
     uint32_t feedback_generation;
 } app_output_snapshot_t;
 
-void output_renderer_init(void);
+esp_err_t output_renderer_init(void);
 void output_renderer_publish(const app_output_snapshot_t *snapshot);
 
 #endif /* CALLBOX_OUTPUT_RENDERER_H */

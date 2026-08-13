@@ -14,10 +14,13 @@
 /** Nạp high-watermark đã lưu (qua sequence_store). Gọi một lần sau nvs_storage_init(). */
 esp_err_t sequence_service_init(void);
 
-/** Cấp phát và lưu bền vững số thứ tự sự kiện toàn thiết bị tiếp theo. */
+/**
+ * Cấp phát số thứ tự tiếp theo. Service reserve bền vững theo block 64 số:
+ * runtime vẫn liên tiếp; reboot có thể bỏ qua đuôi block nhưng không reuse.
+ */
 esp_err_t sequence_next(uint32_t *sequence);
 
-/** Trả về số thứ tự đã lưu thành công gần nhất. */
+/** Trả về số thứ tự runtime đã cấp gần nhất (không phải cuối block reserve). */
 uint32_t sequence_current(void);
 
 #endif /* CALLBOX_SEQUENCE_SERVICE_H */

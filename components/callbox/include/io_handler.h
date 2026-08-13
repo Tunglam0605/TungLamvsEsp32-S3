@@ -37,6 +37,7 @@
 #define _IO_HANDLER_H_
 
 #include <stdint.h>
+#include "esp_err.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "app_event.h"
@@ -65,7 +66,7 @@ typedef struct {
  * @brief Khởi tạo hai queue (io_queue + led_queue) và in sơ đồ mapping.
  *        Phải gọi 1 lần duy nhất từ app_main trước khi tạo task.
  */
-void io_handler_init(void);
+esp_err_t io_handler_init(void);
 
 /** @brief Lấy queue gửi trạng thái I/O cho máy trạng thái (size 1 phần tử). */
 QueueHandle_t io_handler_get_io_queue(void);

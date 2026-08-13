@@ -7,8 +7,8 @@
  *          + key "seq_num") nằm trong callbox_storage_schema.h.
  *
  *          ═══ SEMANTICS ═══
- *          - sequence_store_load(): key thiếu → *sequence = 0 và trả ESP_OK
- *            (legacy: bản cài đặt cũ không có seq_num — bắt đầu lại từ 0).
+ *          - sequence_store_load(): key thiếu → *sequence = 0 và trả ESP_OK;
+ *            lỗi đọc/type/corrupt được trả nguyên để caller fail-safe.
  *          - sequence_store_save(): mở → set u32 → commit → đóng. Trả ESP_OK
  *            CHỈ khi commit thành công (dữ liệu thực sự xuống flash).
  *

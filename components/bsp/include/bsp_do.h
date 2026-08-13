@@ -84,6 +84,22 @@ esp_err_t bsp_do_write(bsp_do_channel_t channel, bool active);
 esp_err_t bsp_do_write_mask(uint8_t active_mask);
 
 /**
+ * @brief Cập nhật một nhóm bit active bằng read-modify-write nguyên tử.
+ *
+ * Các bit ngoài clear_mask/set_mask được giữ nguyên trong cùng mutex, nhờ đó
+ * một subsystem không ghi đè DO do task khác sở hữu.
+ */
+esp_err_t bsp_do_update_mask(uint8_t clear_mask, uint8_t set_mask);
+
+/**
+ * @brief Thử phục hồi bus I2C của khối 8DO sau một chuỗi lỗi liên tiếp.
+ *
+ * API chỉ reset controller I2C; không thay đổi shadow output và không tự ghi
+ * đầu ra. Output Renderer sẽ ghi lại snapshot mong muốn ở vòng reconcile sau.
+ */
+esp_err_t bsp_do_recover_bus(void);
+
+/**
  * @brief Đọc ảnh điện THÔ của thanh ghi OUTPUT (shadow register).
  * @return Ảnh điện thô: bit = 1 → chân HIGH → đầu ra OFF;
  *         bit = 0 → chân LOW → đầu ra ON.

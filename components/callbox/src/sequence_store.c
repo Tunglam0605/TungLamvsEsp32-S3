@@ -7,9 +7,10 @@
  *          literal key bằng CALLBOX_STORAGE_* constants và bỏ các helper
  *          không liên quan. KHÔNG rewrite behavior.
  *
- *          ═══ LEGACY SEMANTICS (GIỮ NGUYÊN) ═══
- *          - load: key thiếu → *sequence = 0, sau close luôn trả ESP_OK
- *            (dù key thiếu) — semantics này được giữ nguyên, không "sửa".
+ *          ═══ LOAD SEMANTICS ═══
+ *          - key thiếu thật sự → *sequence = 0, trả ESP_OK (first boot).
+ *          - lỗi đọc/type/corruption → trả nguyên lỗi; tuyệt đối không giả làm
+ *            first boot vì có thể làm tái sử dụng sequence đã phát.
  *          - save: ESP_OK CHỈ khi cả set lẫn commit thành công.
  *
  * @author  TungLamAutomation <tunglam652004@gmail.com>
@@ -58,23 +59,30 @@ esp_err_t sequence_store_load(uint32_t *sequence)
 
     platform_nvs_handle_t handle;
     esp_err_t err = platform_nvs_open(&handle, CALLBOX_STORAGE_NAMESPACE, true);
+    if (err == ESP_ERR_NOT_FOUND) {
+        /* Namespace chưa tồn tại là first boot hợp lệ. */
+        *sequence = 0;
+        ESP_LOGW(TAG, "Sequence namespace not found, using 0");
+        return ESP_OK;
+    }
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Error opening NVS handle: %s", esp_err_to_name(err));
-        *sequence = 0;
         return err;
     }
 
-    /* Đọc u32 seq_num; nếu chưa có → dùng 0 (legacy: sau close luôn trả
-     * ESP_OK dù key thiếu — semantics này được giữ nguyên, không "sửa"). */
+    /* Provider phân biệt key thiếu bằng `found=false`; các lỗi đọc/type/corrupt
+     * vẫn trả mã lỗi. Chỉ key thực sự chưa tồn tại mới được bắt đầu từ 0. */
     bool found = false;
     err = platform_nvs_get_u32(&handle, CALLBOX_STORAGE_SEQ_KEY, sequence, &found);
     if (err == ESP_OK && found) {
         ESP_LOGI(TAG, "Loaded seq_num=%lu", *sequence);
-    } else {
+    } else if (err == ESP_OK) {
         ESP_LOGW(TAG, "No seq_num found in NVS, using 0");
         *sequence = 0;
+    } else {
+        ESP_LOGE(TAG, "Error reading seq_num: %s", esp_err_to_name(err));
     }
 
     platform_nvs_close(&handle);
-    return ESP_OK;
+    return err;
 }

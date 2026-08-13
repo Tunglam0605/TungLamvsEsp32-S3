@@ -25,10 +25,13 @@ typedef enum {
     APP_EVENT_WCS_COMMAND,
     APP_EVENT_MQTT_CONNECTED,
     APP_EVENT_MQTT_DISCONNECTED,
+    APP_EVENT_WCS_RESYNC_REQUIRED,
 } app_event_type_t;
 
 typedef struct {
     app_event_type_t type;
+    /** Phiên command bắt đầu sau SUBACK; dùng để loại lệnh còn sót từ phiên cũ. */
+    uint32_t session_epoch;
     protocol_command_t command;
 } app_event_t;
 

@@ -10,12 +10,14 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "health_monitor.h"
 
 static const char *TAG = "LED_CONTROL";
 
 /* Queue lệnh buzzer nghiệp vụ — thuộc sở hữu riêng của led_control, không
  * còn là biến toàn cục của app_main. Độ sâu giữ nguyên 10 như baseline. */
 static QueueHandle_t s_buzzer_queue = NULL;
+static TaskHandle_t s_buzzer_task = NULL;
 
 #define BUZZER_QUEUE_DEPTH 10
 
@@ -27,17 +29,37 @@ static int s_tower_color;
 static LEDState_t s_tower_state = LED_OFF;
 static bool s_tower_phase;
 static TickType_t s_tower_last_toggle;
+static uint8_t s_tick_error_streak;
+static TickType_t s_tick_last_error_log;
 
 #define BUTTON_BLINK_SLOW_MS 500U
 #define BUTTON_BLINK_FAST_MS 150U
 #define TOWER_BLINK_SLOW_MS  500U
 #define TOWER_BLINK_FAST_MS  250U
 
-static void do_write(bsp_do_channel_t channel, bool active)
+static esp_err_t do_write(bsp_do_channel_t channel, bool active)
 {
-    const esp_err_t err = bsp_do_write(channel, active);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "DO%d write failed: %s", channel + 1, esp_err_to_name(err));
+    return bsp_do_write(channel, active);
+}
+
+static void note_tick_result(esp_err_t result)
+{
+    if (result == ESP_OK) {
+        if (s_tick_error_streak != 0U) {
+            ESP_LOGI(TAG, "I2C output writes recovered after %u failed tick(s)",
+                     s_tick_error_streak);
+        }
+        s_tick_error_streak = 0U;
+        return;
+    }
+
+    if (s_tick_error_streak < UINT8_MAX) s_tick_error_streak++;
+    const TickType_t now = xTaskGetTickCount();
+    if (s_tick_error_streak == 1U ||
+        now - s_tick_last_error_log >= pdMS_TO_TICKS(5000U)) {
+        ESP_LOGW(TAG, "I2C output tick failed (%u consecutive): %s",
+                 s_tick_error_streak, esp_err_to_name(result));
+        s_tick_last_error_log = now;
     }
 }
 
@@ -61,9 +83,43 @@ static void buzzer_task(void *arg)
     BuzzerCmd_t command;
     while (xQueueReceive(s_buzzer_queue, &command, portMAX_DELAY) == pdTRUE) {
         for (int i = 0; i < command.beep_count; ++i) {
-            do_write(callbox_io_get_mapping()->buzzer, true);
-            vTaskDelay(pdMS_TO_TICKS(command.duration_ms));
-            do_write(callbox_io_get_mapping()->buzzer, false);
+            const bsp_do_channel_t buzzer = callbox_io_get_mapping()->buzzer;
+            const esp_err_t on_err = do_write(buzzer, true);
+            if (on_err == ESP_OK) {
+                vTaskDelay(pdMS_TO_TICKS(command.duration_ms));
+            }
+
+            /* OFF là trạng thái an toàn. Nếu nhiễu I2C xảy ra đúng lúc kết thúc
+             * tiếng bíp, retry có backoff trong task riêng cho tới khi TCA xác
+             * nhận OFF. Việc này không khóa Mission/Renderer và ngăn còi DO1 bị
+             * giữ ON vô hạn sau một lỗi bus thoáng qua. */
+            uint32_t retry_ms = 20U;
+            uint32_t failures = 0U;
+            TickType_t last_log = 0;
+            esp_err_t off_err;
+            while ((off_err = do_write(buzzer, false)) != ESP_OK) {
+                failures++;
+                const TickType_t now = xTaskGetTickCount();
+                if (failures == 1U || now - last_log >= pdMS_TO_TICKS(5000U)) {
+                    ESP_LOGE(TAG, "Buzzer safe-OFF failed (%lu attempts): %s",
+                             (unsigned long)failures, esp_err_to_name(off_err));
+                    last_log = now;
+                }
+                vTaskDelay(pdMS_TO_TICKS(retry_ms));
+                if (retry_ms < 1000U) {
+                    retry_ms = retry_ms * 2U > 1000U ? 1000U : retry_ms * 2U;
+                }
+                /* Không để worker kẹt vô hạn nếu bus/expander hỏng
+                 * vĩnh viễn. Sau 8 lần (xấp xỉ 3,3 giây backoff),
+                 * controlled restart sẽ tạo lại bus và đưa DO về safe. */
+                if (failures >= 8U) {
+                    health_monitor_force_restart("buzzer_safe_off_failed");
+                }
+            }
+            if (failures != 0U) {
+                ESP_LOGW(TAG, "Buzzer safe-OFF recovered after %lu attempt(s)",
+                         (unsigned long)failures);
+            }
             if (i + 1 < command.beep_count) vTaskDelay(pdMS_TO_TICKS(100));
         }
     }
@@ -84,29 +140,44 @@ esp_err_t led_control_prepare(void)
     return ESP_OK;
 }
 
-void led_control_init(void)
+esp_err_t led_control_init(void)
 {
-    if (s_buzzer_queue && xTaskCreate(buzzer_task, "buzzer_task", 2048, NULL, 6, NULL) == pdPASS) {
-        ESP_LOGI(TAG, "Output primitives ready via BSP");
-    } else {
-        ESP_LOGE(TAG, "Buzzer queue/task unavailable");
+    if (s_buzzer_task) return ESP_OK;
+    if (!s_buzzer_queue) {
+        ESP_LOGE(TAG, "Buzzer queue unavailable");
+        return ESP_ERR_INVALID_STATE;
     }
+    if (xTaskCreate(buzzer_task, "buzzer_task", 2048, NULL, 6,
+                    &s_buzzer_task) != pdPASS) {
+        s_buzzer_task = NULL;
+        ESP_LOGE(TAG, "Buzzer task unavailable");
+        return ESP_ERR_NO_MEM;
+    }
+    ESP_LOGI(TAG, "Output primitives ready via BSP");
+    return ESP_OK;
 }
 
-void set_button_led(int button_id, LEDState_t state)
+esp_err_t set_button_led(int button_id, LEDState_t state)
 {
-    if (button_id < 1 || button_id > 3) return;
+    if (button_id < 1 || button_id > 3) return ESP_ERR_INVALID_ARG;
     const int index = button_id - 1;
+    const bool initial_phase = state != LED_OFF;
+    const esp_err_t err = do_write(button_channel(button_id), initial_phase);
+    if (err != ESP_OK) return err;
+
+    /* Chỉ commit bộ tạo pattern sau khi hardware write thành công. Nếu I2C lỗi,
+     * renderer sẽ retry mà không làm lệch phase/cache phần mềm. */
     s_button_state[index] = state;
-    s_button_phase[index] = state != LED_OFF;
+    s_button_phase[index] = initial_phase;
     s_button_flash_remaining[index] = state == LED_FLASH_2 ? 2U :
                                       state == LED_FLASH_3 ? 3U : 0U;
     s_button_last_toggle[index] = xTaskGetTickCount();
-    do_write(button_channel(button_id), s_button_phase[index]);
+    return ESP_OK;
 }
 
-void led_control_tick(void)
+esp_err_t led_control_tick(void)
 {
+    esp_err_t first_error = ESP_OK;
     const TickType_t now = xTaskGetTickCount();
     for (int i = 0; i < 3; ++i) {
         const uint32_t interval_ms = (s_button_state[i] == LED_BLINK_FAST ||
@@ -115,40 +186,65 @@ void led_control_tick(void)
                                      s_button_state[i] == LED_BLINK_SLOW ? BUTTON_BLINK_SLOW_MS : 0U;
         if (!interval_ms || now - s_button_last_toggle[i] < pdMS_TO_TICKS(interval_ms)) continue;
         if ((s_button_state[i] == LED_FLASH_2 || s_button_state[i] == LED_FLASH_3) &&
-            s_button_phase[i] && --s_button_flash_remaining[i] == 0U) {
+            s_button_phase[i]) {
+            const bool final_flash = s_button_flash_remaining[i] <= 1U;
+            const esp_err_t err = do_write(button_channel(i + 1), false);
+            if (err != ESP_OK) {
+                if (first_error == ESP_OK) first_error = err;
+                continue;
+            }
+            if (s_button_flash_remaining[i] != 0U) s_button_flash_remaining[i]--;
             s_button_phase[i] = false;
-            s_button_state[i] = LED_OFF;
             s_button_last_toggle[i] = now;
-            do_write(button_channel(i + 1), false);
+            if (final_flash) s_button_state[i] = LED_OFF;
             continue;
         }
-        s_button_phase[i] = !s_button_phase[i];
+        const bool next_phase = !s_button_phase[i];
+        const esp_err_t err = do_write(button_channel(i + 1), next_phase);
+        if (err != ESP_OK) {
+            if (first_error == ESP_OK) first_error = err;
+            continue;
+        }
+        s_button_phase[i] = next_phase;
         s_button_last_toggle[i] = now;
-        do_write(button_channel(i + 1), s_button_phase[i]);
     }
 
     const uint32_t tower_interval_ms = s_tower_state == LED_BLINK_FAST ?
                                        TOWER_BLINK_FAST_MS :
                                        s_tower_state == LED_BLINK_SLOW ? TOWER_BLINK_SLOW_MS : 0U;
     if (tower_interval_ms && now - s_tower_last_toggle >= pdMS_TO_TICKS(tower_interval_ms)) {
-        s_tower_phase = !s_tower_phase;
+        const bool next_phase = !s_tower_phase;
+        const esp_err_t err = do_write(tower_channel(s_tower_color), next_phase);
+        if (err != ESP_OK) {
+            if (first_error == ESP_OK) first_error = err;
+            note_tick_result(first_error);
+            return first_error;
+        }
+        s_tower_phase = next_phase;
         s_tower_last_toggle = now;
-        do_write(tower_channel(s_tower_color), s_tower_phase);
     }
+    note_tick_result(first_error);
+    return first_error;
 }
 
-void set_tower_light(int color, LEDState_t state)
+esp_err_t set_tower_light(int color, LEDState_t state)
 {
     const callbox_io_mapping_t *mapping = callbox_io_get_mapping();
-    do_write(mapping->tower_red, false);
-    do_write(mapping->tower_yellow, false);
-    do_write(mapping->tower_green, false);
+    const uint8_t tower_mask = (uint8_t)((1u << mapping->tower_red) |
+                                         (1u << mapping->tower_yellow) |
+                                         (1u << mapping->tower_green));
+    const bool initial_phase = state != LED_OFF && color != 0;
+    const uint8_t set_mask = initial_phase ?
+                             (uint8_t)(1u << tower_channel(color)) : 0U;
+
+    /* Một giao dịch mask giúp tránh ba lần I2C + trạng thái tower trung gian. */
+    const esp_err_t err = bsp_do_update_mask(tower_mask, set_mask);
+    if (err != ESP_OK) return err;
     s_tower_color = color;
     s_tower_state = state;
-    s_tower_phase = state != LED_OFF && color != 0;
+    s_tower_phase = initial_phase;
     s_tower_last_toggle = xTaskGetTickCount();
-    if (state == LED_OFF || color == 0) return;
-    do_write(tower_channel(color), s_tower_phase);
+    return ESP_OK;
 }
 
 void buzzer_beep(int beep_count, int duration_ms)

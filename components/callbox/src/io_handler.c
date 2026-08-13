@@ -39,6 +39,7 @@
 #include "bsp_di.h"
 #include "io_handler.h"
 #include "callbox_io.h"
+#include "health_monitor.h"
 #include "status.h"
 #include <time.h>
 
@@ -56,15 +57,23 @@ static QueueHandle_t s_button_event_queue = NULL;
 /* Mask các nút đang nhấn, đã chống nhiễu — dùng chung cho chẩn đoán */
 static volatile uint8_t s_stable_input_mask = 0;
 
-void io_handler_init(void)
+esp_err_t io_handler_init(void)
 {
+    if (s_io_queue && s_button_event_queue) return ESP_OK;
+
     /* Tạo hai queue 1 phần tử (đè giá trị cũ) để truyền trạng thái nút */
     s_io_queue = xQueueCreate(1, sizeof(io_state_t));
+    if (!s_io_queue) {
+        ESP_LOGE(TAG, "[IO_INIT_ERR] Failed to create I/O snapshot queue");
+        return ESP_ERR_NO_MEM;
+    }
     s_button_event_queue = xQueueCreate(16, sizeof(ButtonMsg_t));
 
-    if (s_io_queue == NULL || s_button_event_queue == NULL) {
-        ESP_LOGE(TAG, "[IO_INIT_ERR] Failed to create queues");
-        return;
+    if (!s_button_event_queue) {
+        ESP_LOGE(TAG, "[IO_INIT_ERR] Failed to create button event queue");
+        vQueueDelete(s_io_queue);
+        s_io_queue = NULL;
+        return ESP_ERR_NO_MEM;
     }
 
     /* GPIO đã được cấu hình bởi BSP (bsp_di_init trong bsp_board_init) */
@@ -75,6 +84,7 @@ void io_handler_init(void)
     ESP_LOGI(TAG, "[IO_INIT] - DI%d: BTN_TASK1 (Exchange Cart)", m->btn_task1 + 1);
     ESP_LOGI(TAG, "[IO_INIT] - DI%d: BTN_TASK2 (Supply Empty)", m->btn_task2 + 1);
     ESP_LOGI(TAG, "[IO_INIT] - DI%d: BTN_CANCEL", m->btn_cancel + 1);
+    return ESP_OK;
 }
 
 QueueHandle_t io_handler_get_io_queue(void)
@@ -113,6 +123,8 @@ void io_handler_task(void *pvParameters)
     TickType_t candidate_since[3] = {0};
     TickType_t last_press_tick[3] = {0};
     uint8_t debounce_initialized = 0;
+
+    health_monitor_check_in(HEALTH_TASK_IO_HANDLER);
 
     while (1) {
         task_cycle++;
@@ -194,6 +206,9 @@ void io_handler_task(void *pvParameters)
         /* Gửi trạng thái I/O cho máy trạng thái (xQueueOverwrite: luôn giữ mới nhất) */
         xQueueOverwrite(s_io_queue, &io_state);
 
+        /* Chỉ báo nhịp sau khi đã đọc BSP, debounce và publish
+         * snapshot xong; một vòng bị treo sẽ không che mắt watchdog. */
+        health_monitor_check_in(HEALTH_TASK_IO_HANDLER);
         vTaskDelay(pdMS_TO_TICKS(IO_SAMPLE_PERIOD_MS));
     }
 }

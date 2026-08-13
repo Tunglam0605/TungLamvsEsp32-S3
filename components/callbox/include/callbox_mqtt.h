@@ -42,6 +42,9 @@
 
 #include "freertos/FreeRTOS.h"
 #include "callbox_config.h"
+#include "esp_err.h"
+#include <stdbool.h>
+#include <stdint.h>
 #include <time.h>
 
 /* Chủ đề MQTT */
@@ -63,13 +66,27 @@ typedef struct {
     int retain;
 } MQTTMsg_t;
 
+typedef struct {
+    uint32_t tx_queued;
+    uint32_t tx_queue_dropped;
+    uint32_t tx_client_busy;
+    uint32_t tx_not_operational;
+    uint32_t tx_outbox_failed;
+    uint32_t tx_stale_dropped;
+    uint32_t tx_inflight_dropped;
+    uint32_t command_dropped;
+    uint32_t command_fragmented;
+    uint32_t command_oversized;
+    uint32_t lifecycle_coalesced;
+} mqtt_runtime_stats_t;
+
 /**
  * @brief Khởi tạo client MQTT với cấu hình truyền vào tường minh.
  *
  * Cấu hình được chụp vào snapshot riêng của adapter; không lưu con trỏ
  * vào Config_t của caller (portal có thể sửa đổi khi chạy).
  */
-void mqtt_client_init(const Config_t *config);
+esp_err_t mqtt_client_init(const Config_t *config);
 
 /**
  * @brief Kết nối tới broker MQTT
@@ -82,7 +99,7 @@ void mqtt_client_connect(void);
  * Nếu runtime MQTT chưa khởi tạo (portal lưu sớm trước mqtt_client_init),
  * chỉ cập nhật snapshot — mqtt_client_init sau đó dùng cấu hình mới nhất.
  */
-void mqtt_client_reconfigure(const Config_t *config);
+esp_err_t mqtt_client_reconfigure(const Config_t *config);
 
 /**
  * @brief Đăng ký nhận topic lệnh
@@ -92,18 +109,22 @@ void mqtt_client_subscribe_cmd(void);
 /**
  * @brief Publish một sự kiện call theo phạm vi task.
  */
-void mqtt_publish_call(int task, uint32_t seq, uint32_t timestamp);
+bool mqtt_publish_call(int task, uint32_t seq, uint32_t timestamp);
 
 /** @brief Publish một sự kiện cancel theo phạm vi task. */
-void mqtt_publish_cancel(int task, uint32_t seq, uint32_t timestamp);
+bool mqtt_publish_cancel(int task, uint32_t seq, uint32_t timestamp);
 
 /** @brief Publish yêu cầu đồng bộ WCS theo phạm vi thiết bị. */
-void mqtt_publish_sync_request(uint32_t seq, uint32_t timestamp);
+bool mqtt_publish_sync_request(uint32_t seq, uint32_t timestamp);
 
 /**
  * @brief Publish heartbeat/trạng thái
  */
 void mqtt_publish_status(void);
+
+/** @brief Chụp các bộ đếm lỗi/backpressure của adapter MQTT. */
+void mqtt_get_runtime_stats(mqtt_runtime_stats_t *stats);
+
 
 /**
  * @brief MQTT event handler task
