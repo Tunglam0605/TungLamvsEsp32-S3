@@ -24,6 +24,7 @@
 #include "esp_twai_onchip.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 
 #define BSP_CAN_TX_GPIO          GPIO_NUM_2
 #define BSP_CAN_RX_GPIO          GPIO_NUM_3
@@ -36,6 +37,10 @@ static const char *TAG = "BSP_CAN";
  * sang Task; khong expose QueueHandle ra ngoai de BSP giu ownership. */
 static twai_node_handle_t s_node;
 static QueueHandle_t s_rx_queue;
+/* ESP-IDF TWAI v6 queues pointers to twai_frame_t rather than copying the
+ * frame. Keep a caller's stack frame alive until the controller is idle, and
+ * serialize senders so no queued pointer can outlive this function. */
+static SemaphoreHandle_t s_tx_mutex;
 /* Tang trong ISR khi RX nhanh hon Task consumer; chi dung de chan doan. */
 static volatile uint32_t s_rx_queue_overflow_count;
 static volatile uint32_t s_tx_success_count;
@@ -175,6 +180,12 @@ esp_err_t bsp_can_init(void)
     if (s_rx_queue == NULL) {
         return ESP_ERR_NO_MEM;
     }
+    s_tx_mutex = xSemaphoreCreateMutex();
+    if (s_tx_mutex == NULL) {
+        vQueueDelete(s_rx_queue);
+        s_rx_queue = NULL;
+        return ESP_ERR_NO_MEM;
+    }
 
     /* GPIO2/GPIO3 la mapping co dinh cua transceiver CAN cach ly tren board.
      * 80 percent sample point phu hop Classic CAN 250 kbps. */
@@ -197,6 +208,8 @@ esp_err_t bsp_can_init(void)
     if (err != ESP_OK) {
         vQueueDelete(s_rx_queue);
         s_rx_queue = NULL;
+        vSemaphoreDelete(s_tx_mutex);
+        s_tx_mutex = NULL;
         return err;
     }
 
@@ -215,6 +228,8 @@ esp_err_t bsp_can_init(void)
         s_node = NULL;
         vQueueDelete(s_rx_queue);
         s_rx_queue = NULL;
+        vSemaphoreDelete(s_tx_mutex);
+        s_tx_mutex = NULL;
         return err;
     }
 
@@ -249,6 +264,8 @@ esp_err_t bsp_can_deinit(void)
     s_node = NULL;
     vQueueDelete(s_rx_queue);
     s_rx_queue = NULL;
+    vSemaphoreDelete(s_tx_mutex);
+    s_tx_mutex = NULL;
     s_rx_queue_overflow_count = 0;
     return ESP_OK;
 }
@@ -274,7 +291,19 @@ esp_err_t bsp_can_send(const bsp_can_frame_t *frame, uint32_t timeout_ms)
         .buffer = (uint8_t *)frame->data,
         .buffer_len = frame->dlc,
     };
-    return twai_node_transmit(s_node, &tx, (int)timeout_ms);
+    const TickType_t lock_timeout = pdMS_TO_TICKS(timeout_ms == 0U ? 100U : timeout_ms);
+    if (s_tx_mutex == NULL || xSemaphoreTake(s_tx_mutex, lock_timeout) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    esp_err_t err = twai_node_transmit(s_node, &tx, (int)timeout_ms);
+    if (err == ESP_OK) {
+        /* Do not return until the driver has stopped dereferencing `tx`. */
+        const uint32_t wait_ms = timeout_ms == 0U ? 100U : timeout_ms;
+        err = twai_node_transmit_wait_all_done(s_node, (int)wait_ms);
+    }
+    xSemaphoreGive(s_tx_mutex);
+    return err;
 }
 
 esp_err_t bsp_can_receive(bsp_can_frame_t *frame, uint32_t timeout_ms)

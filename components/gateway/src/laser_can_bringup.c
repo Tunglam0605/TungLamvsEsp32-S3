@@ -30,6 +30,8 @@
 #define LASER_CAN_NODE_TIMEOUT_MS       2000U
 #define LASER_CAN_OBSTACLE_TIMEOUT_MS   2000U
 #define LASER_CAN_DISTANCE_MAX_MM       1200U
+#define LASER_CAN_STARTUP_RESTORE_DELAY_MS  1500U
+#define LASER_CAN_STARTUP_RESTORE_GAP_MS     400U
 
 typedef struct {
     bool armed;
@@ -363,6 +365,41 @@ static void send_discovery_heartbeat(void)
     }
 }
 
+/* A Laser can ask for its profile before the ESP32 CAN RX task is ready on a
+ * simultaneous cold boot.  Trigger the existing reload handshake once for
+ * every configuration that Warehouse Manager restored and explicitly armed. */
+static bool trigger_startup_restore(uint8_t group)
+{
+    laser_group_config_t config = { 0 };
+    taskENTER_CRITICAL(&s_status_mux);
+    if (group < LASER_CAN_B300_GROUP_COUNT) {
+        config = s_group_config[group];
+    }
+    taskEXIT_CRITICAL(&s_status_mux);
+    if (!config.armed) {
+        return false;
+    }
+
+    const esp_err_t proximity_error = send_group_proximity(group, &config);
+    const bsp_can_frame_t reload = {
+        .id = LASER_CAN_GROUP_CONFIG_ID,
+        .dlc = 1U,
+        .data = { group },
+    };
+    const esp_err_t reload_error = proximity_error == ESP_OK
+        ? bsp_can_send(&reload, 100U) : ESP_FAIL;
+
+    if (proximity_error == ESP_OK && reload_error == ESP_OK) {
+        ESP_LOGI(TAG, "TX startup restore trigger group=%u enable=%u",
+                 group, config.proximity_enabled);
+    } else {
+        ESP_LOGE(TAG, "Startup restore trigger group=%u failed: proximity=%s reload=%s",
+                 group, esp_err_to_name(proximity_error),
+                 esp_err_to_name(reload_error));
+    }
+    return true;
+}
+
 static void log_can_health(void)
 {
     bsp_can_status_t status = { 0 };
@@ -406,6 +443,9 @@ static void laser_can_bringup_task(void *context)
         (int64_t)LASER_CAN_HEARTBEAT_PERIOD_MS * 1000LL;
     int64_t next_heartbeat_us = esp_timer_get_time();
     int64_t next_health_us = 0;
+    uint8_t startup_restore_group = 0U;
+    int64_t next_startup_restore_us = next_heartbeat_us +
+        (int64_t)LASER_CAN_STARTUP_RESTORE_DELAY_MS * 1000LL;
 
     for (;;) {
         const int64_t now_us = esp_timer_get_time();
@@ -419,6 +459,18 @@ static void laser_can_bringup_task(void *context)
         if (now_us >= next_health_us) {
             log_can_health();
             next_health_us = now_us + (int64_t)LASER_CAN_HEALTH_PERIOD_MS * 1000LL;
+        }
+        if (startup_restore_group < LASER_CAN_B300_GROUP_COUNT &&
+            now_us >= next_startup_restore_us) {
+            bool triggered = false;
+            while (startup_restore_group < LASER_CAN_B300_GROUP_COUNT &&
+                   !triggered) {
+                triggered = trigger_startup_restore(startup_restore_group++);
+            }
+            if (triggered) {
+                next_startup_restore_us = now_us +
+                    (int64_t)LASER_CAN_STARTUP_RESTORE_GAP_MS * 1000LL;
+            }
         }
 
         bsp_can_frame_t frame = { 0 };
