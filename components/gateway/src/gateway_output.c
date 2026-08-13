@@ -27,30 +27,53 @@ typedef struct {
 } buzzer_pattern_t;
 
 #define B(on, off) { (on), (off) }
-static const buzzer_step_t P_AP_ON[] = {B(120,90),B(120,90),B(120,0)};
-static const buzzer_step_t P_AP_OFF[] = {B(650,180),B(650,0)};
-static const buzzer_step_t P_NET_UP[] = {B(120,100),B(120,0)};
-static const buzzer_step_t P_NET_DOWN[] = {B(650,0)};
-static const buzzer_step_t P_MQTT_UP[] = {B(120,120),B(650,160),B(650,0)};
-static const buzzer_step_t P_MQTT_DOWN[] = {B(400,100),B(400,0)};
-static const buzzer_step_t P_CAN_OFF[] = {B(800,120),B(800,0)};
-static const buzzer_step_t P_RECOVERED[] = {B(100,80),B(100,0)};
-static const buzzer_step_t P_LASER_OFF[] = {B(300,100),B(300,100),B(300,0)};
-static const buzzer_step_t P_MISMATCH[] = {B(180,80),B(180,80),B(180,0)};
+/* Mã nhịp hiện trường: S = ngắn 100 ms, L = dài 450 ms.
+ * Mỗi sự kiện có một mã riêng và kết thúc bằng 400 ms im lặng để hai sự kiện
+ * liên tiếp không dính thành một chuỗi khó nhận biết. */
+static const buzzer_step_t P_AP_ON[] = {B(100,100),B(100,100),B(100,400)};       /* S S S */
+static const buzzer_step_t P_AP_OFF[] = {B(450,120),B(450,400)};                  /* L L */
+static const buzzer_step_t P_NET_UP[] = {B(100,100),B(100,400)};                  /* S S */
+static const buzzer_step_t P_NET_DOWN[] = {B(450,400)};                           /* L */
+static const buzzer_step_t P_MQTT_UP[] = {B(100,120),B(450,120),B(450,400)};      /* S L L */
+static const buzzer_step_t P_MQTT_DOWN[] = {B(450,120),B(100,120),B(100,400)};    /* L S S */
+static const buzzer_step_t P_CAN_OFF[] = {B(450,120),B(100,120),B(450,400)};      /* L S L */
+static const buzzer_step_t P_CAN_RECOVERED[] = {B(100,120),B(450,120),B(100,400)}; /* S L S */
+static const buzzer_step_t P_LASER_OFF[] = {B(450,100),B(100,100),B(100,100),B(100,400)}; /* L S S S */
+static const buzzer_step_t P_LASER_RECOVERED[] = {B(100,100),B(100,100),B(100,120),B(450,400)}; /* S S S L */
+static const buzzer_step_t P_MISMATCH[] = {B(100,100),B(450,100),B(100,100),B(450,400)}; /* S L S L */
 
+#define PATTERN(steps) { (steps), (uint8_t)(sizeof(steps) / sizeof((steps)[0])) }
 static const buzzer_pattern_t PATTERNS[GATEWAY_DIAG_EVENT_COUNT] = {
-    [GATEWAY_DIAG_AP_ON] = {P_AP_ON, 3},
-    [GATEWAY_DIAG_AP_OFF] = {P_AP_OFF, 2},
-    [GATEWAY_DIAG_NETWORK_UP] = {P_NET_UP, 2},
-    [GATEWAY_DIAG_NETWORK_DOWN] = {P_NET_DOWN, 1},
-    [GATEWAY_DIAG_MQTT_UP] = {P_MQTT_UP, 3},
-    [GATEWAY_DIAG_MQTT_DOWN] = {P_MQTT_DOWN, 2},
-    [GATEWAY_DIAG_CAN_BUS_OFF] = {P_CAN_OFF, 2},
-    [GATEWAY_DIAG_CAN_RECOVERED] = {P_RECOVERED, 2},
-    [GATEWAY_DIAG_LASER_OFFLINE] = {P_LASER_OFF, 3},
-    [GATEWAY_DIAG_LASER_RECOVERED] = {P_RECOVERED, 2},
-    [GATEWAY_DIAG_CONFIG_MISMATCH] = {P_MISMATCH, 3},
+    [GATEWAY_DIAG_AP_ON] = PATTERN(P_AP_ON),
+    [GATEWAY_DIAG_AP_OFF] = PATTERN(P_AP_OFF),
+    [GATEWAY_DIAG_NETWORK_UP] = PATTERN(P_NET_UP),
+    [GATEWAY_DIAG_NETWORK_DOWN] = PATTERN(P_NET_DOWN),
+    [GATEWAY_DIAG_MQTT_UP] = PATTERN(P_MQTT_UP),
+    [GATEWAY_DIAG_MQTT_DOWN] = PATTERN(P_MQTT_DOWN),
+    [GATEWAY_DIAG_CAN_BUS_OFF] = PATTERN(P_CAN_OFF),
+    [GATEWAY_DIAG_CAN_RECOVERED] = PATTERN(P_CAN_RECOVERED),
+    [GATEWAY_DIAG_LASER_OFFLINE] = PATTERN(P_LASER_OFF),
+    [GATEWAY_DIAG_LASER_RECOVERED] = PATTERN(P_LASER_RECOVERED),
+    [GATEWAY_DIAG_CONFIG_MISMATCH] = PATTERN(P_MISMATCH),
 };
+
+static const char *event_name(gateway_diagnostic_event_t event)
+{
+    static const char *const names[GATEWAY_DIAG_EVENT_COUNT] = {
+        [GATEWAY_DIAG_AP_ON] = "AP_ON SSS",
+        [GATEWAY_DIAG_AP_OFF] = "AP_OFF LL",
+        [GATEWAY_DIAG_NETWORK_UP] = "NETWORK_UP SS",
+        [GATEWAY_DIAG_NETWORK_DOWN] = "NETWORK_DOWN L",
+        [GATEWAY_DIAG_MQTT_UP] = "MQTT_UP SLL",
+        [GATEWAY_DIAG_MQTT_DOWN] = "MQTT_DOWN LSS",
+        [GATEWAY_DIAG_CAN_BUS_OFF] = "CAN_BUS_OFF LSL",
+        [GATEWAY_DIAG_CAN_RECOVERED] = "CAN_RECOVERED SLS",
+        [GATEWAY_DIAG_LASER_OFFLINE] = "LASER_OFFLINE LSSS",
+        [GATEWAY_DIAG_LASER_RECOVERED] = "LASER_RECOVERED SSSL",
+        [GATEWAY_DIAG_CONFIG_MISMATCH] = "CONFIG_MISMATCH SLSL",
+    };
+    return event < GATEWAY_DIAG_EVENT_COUNT ? names[event] : "UNKNOWN";
+}
 
 static const char *TAG = "GW_OUTPUT";
 static QueueHandle_t s_events;
@@ -107,11 +130,19 @@ static void output_task(void *argument)
 
     for (;;) {
         gateway_diagnostic_event_t event;
-        if (xQueueReceive(s_events, &event, pdMS_TO_TICKS(OUTPUT_TICK_MS)) == pdTRUE) {
+        /* Phát hết một mã rồi mới lấy sự kiện kế tiếp. Nếu nhiều trạng thái đổi
+         * cùng lúc, các mã được phát theo thứ tự thay vì ghi đè sau 20 ms. */
+        const BaseType_t received = pattern == NULL
+            ? xQueueReceive(s_events, &event, pdMS_TO_TICKS(OUTPUT_TICK_MS))
+            : pdFALSE;
+        if (received == pdTRUE) {
             pattern = &PATTERNS[event];
             step = 0;
             buzzer_on = pattern->count > 0;
             buzzer_deadline = now_ms() + (buzzer_on ? pattern->steps[0].on_ms : 0U);
+            ESP_LOGI(TAG, "Buzzer code: %s", event_name(event));
+        } else if (pattern != NULL) {
+            vTaskDelay(pdMS_TO_TICKS(OUTPUT_TICK_MS));
         }
         const uint32_t now = now_ms();
         if (pattern != NULL && (int32_t)(now - buzzer_deadline) >= 0) {
