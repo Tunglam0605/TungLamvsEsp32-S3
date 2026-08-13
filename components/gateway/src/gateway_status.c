@@ -2,6 +2,7 @@
 
 #include "bsp_can.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "gateway_mqtt.h"
@@ -12,6 +13,7 @@
 #include "warehouse_manager.h"
 
 static const char *TAG = "GW_STATUS";
+#define LASER_STARTUP_SETTLE_MS 10000LL
 
 esp_err_t gateway_diagnostic_report(gateway_diagnostic_event_t event)
 {
@@ -42,6 +44,8 @@ static void status_task(void *argument)
     (void)argument;
     bool initialized = false, network = false, mqtt = false, ap = false;
     bool can_ok = true, laser_ok = false, mismatch = false;
+    bool laser_monitor_armed = false;
+    const int64_t started_ms = esp_timer_get_time() / 1000LL;
     for (;;) {
         bsp_can_status_t can = {0};
         warehouse_snapshot_t warehouse;
@@ -76,8 +80,18 @@ static void status_task(void *argument)
                               GATEWAY_DIAG_AP_OFF);
             report_transition(next_can, &can_ok, GATEWAY_DIAG_CAN_RECOVERED,
                               GATEWAY_DIAG_CAN_BUS_OFF);
-            report_transition(next_laser, &laser_ok, GATEWAY_DIAG_LASER_RECOVERED,
-                              GATEWAY_DIAG_LASER_OFFLINE);
+            if (!laser_monitor_armed) {
+                laser_ok = next_laser;
+                laser_monitor_armed = esp_timer_get_time() / 1000LL - started_ms >=
+                                      LASER_STARTUP_SETTLE_MS;
+                if (laser_monitor_armed) {
+                    ESP_LOGI(TAG, "Laser alarms armed after startup restore settle time");
+                }
+            } else {
+                report_transition(next_laser, &laser_ok,
+                                  GATEWAY_DIAG_LASER_RECOVERED,
+                                  GATEWAY_DIAG_LASER_OFFLINE);
+            }
             if (next_mismatch && !mismatch)
                 (void)gateway_output_report(GATEWAY_DIAG_CONFIG_MISMATCH);
             mismatch = next_mismatch;
