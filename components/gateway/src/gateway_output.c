@@ -13,64 +13,97 @@
 #define OUTPUT_QUEUE_DEPTH 12U
 #define OUTPUT_TICK_MS 20U
 #define TOWER_BLINK_MS 500U
-#define ONBOARD_BUZZER_HZ 2000U
 #define ONBOARD_BUZZER_DUTY 50U
 
 typedef struct {
+    uint16_t frequency_hz;
     uint16_t on_ms;
     uint16_t off_ms;
 } buzzer_step_t;
 
+typedef enum {
+    INDICATOR_AP = 0,
+    INDICATOR_GREEN,
+    INDICATOR_YELLOW,
+    INDICATOR_RED,
+    INDICATOR_RED_YELLOW,
+} event_indicator_t;
+
 typedef struct {
     const buzzer_step_t *steps;
     uint8_t count;
+    event_indicator_t indicator;
 } buzzer_pattern_t;
 
-#define B(on, off) { (on), (off) }
-/* Mã nhịp hiện trường: S = ngắn 100 ms, L = dài 450 ms.
- * Mỗi sự kiện có một mã riêng và kết thúc bằng 400 ms im lặng để hai sự kiện
- * liên tiếp không dính thành một chuỗi khó nhận biết. */
-static const buzzer_step_t P_AP_ON[] = {B(100,100),B(100,100),B(100,400)};       /* S S S */
-static const buzzer_step_t P_AP_OFF[] = {B(450,120),B(450,400)};                  /* L L */
-static const buzzer_step_t P_NET_UP[] = {B(100,100),B(100,400)};                  /* S S */
-static const buzzer_step_t P_NET_DOWN[] = {B(450,400)};                           /* L */
-static const buzzer_step_t P_MQTT_UP[] = {B(100,120),B(450,120),B(450,400)};      /* S L L */
-static const buzzer_step_t P_MQTT_DOWN[] = {B(450,120),B(100,120),B(100,400)};    /* L S S */
-static const buzzer_step_t P_CAN_OFF[] = {B(450,120),B(100,120),B(450,400)};      /* L S L */
-static const buzzer_step_t P_CAN_RECOVERED[] = {B(100,120),B(450,120),B(100,400)}; /* S L S */
-static const buzzer_step_t P_LASER_OFF[] = {B(450,100),B(100,100),B(100,100),B(100,400)}; /* L S S S */
-static const buzzer_step_t P_LASER_RECOVERED[] = {B(100,100),B(100,100),B(100,120),B(450,400)}; /* S S S L */
-static const buzzer_step_t P_MISMATCH[] = {B(100,100),B(450,100),B(100,100),B(450,400)}; /* S L S L */
+#define NOTE(hz, on, off) { (hz), (on), (off) }
+/* Giai điệu hiện trường dùng cả hướng cao độ và tiết tấu. Còi DO1 theo đúng
+ * nhịp bật/tắt; buzzer thụ động onboard bổ sung cao độ để nhận biết tức thì. */
+static const buzzer_step_t P_AP_ON[] = {
+    NOTE(2600, 100, 80), NOTE(2600, 100, 80), NOTE(2600, 100, 400),
+}; /* ba tiếng cao nhanh */
+static const buzzer_step_t P_AP_OFF[] = {
+    NOTE(900, 300, 120), NOTE(900, 300, 400),
+}; /* hai tiếng trầm chậm */
+static const buzzer_step_t P_NET_UP[] = {
+    NOTE(1200, 150, 80), NOTE(2400, 220, 400),
+}; /* hai nốt đi lên */
+static const buzzer_step_t P_NET_DOWN[] = {
+    NOTE(2400, 150, 80), NOTE(1200, 300, 400),
+}; /* hai nốt đi xuống */
+static const buzzer_step_t P_MQTT_UP[] = {
+    NOTE(900, 130, 70), NOTE(1600, 130, 70), NOTE(2600, 220, 400),
+}; /* ba nốt đi lên */
+static const buzzer_step_t P_MQTT_DOWN[] = {
+    NOTE(2600, 130, 70), NOTE(1600, 130, 70), NOTE(900, 300, 400),
+}; /* ba nốt đi xuống */
+static const buzzer_step_t P_CAN_OFF[] = {
+    NOTE(750, 230, 80), NOTE(2500, 230, 80),
+    NOTE(750, 230, 80), NOTE(2500, 230, 400),
+}; /* còi cảnh báo thấp-cao lặp lại */
+static const buzzer_step_t P_CAN_RECOVERED[] = {
+    NOTE(2400, 120, 80), NOTE(1000, 120, 80), NOTE(2400, 220, 400),
+}; /* cao-thấp-cao */
+static const buzzer_step_t P_LASER_OFF[] = {
+    NOTE(800, 260, 100), NOTE(800, 260, 100), NOTE(800, 260, 400),
+}; /* ba tiếng trầm chậm */
+static const buzzer_step_t P_LASER_RECOVERED[] = {
+    NOTE(2700, 100, 80), NOTE(2700, 100, 80), NOTE(2700, 160, 400),
+}; /* ba tiếng cao nhanh */
+static const buzzer_step_t P_MISMATCH[] = {
+    NOTE(2600, 140, 80), NOTE(800, 140, 80),
+    NOTE(2600, 140, 80), NOTE(800, 220, 400),
+}; /* cao-thấp lặp lại */
 
-#define PATTERN(steps) { (steps), (uint8_t)(sizeof(steps) / sizeof((steps)[0])) }
+#define PATTERN(steps, light) \
+    { (steps), (uint8_t)(sizeof(steps) / sizeof((steps)[0])), (light) }
 static const buzzer_pattern_t PATTERNS[GATEWAY_DIAG_EVENT_COUNT] = {
-    [GATEWAY_DIAG_AP_ON] = PATTERN(P_AP_ON),
-    [GATEWAY_DIAG_AP_OFF] = PATTERN(P_AP_OFF),
-    [GATEWAY_DIAG_NETWORK_UP] = PATTERN(P_NET_UP),
-    [GATEWAY_DIAG_NETWORK_DOWN] = PATTERN(P_NET_DOWN),
-    [GATEWAY_DIAG_MQTT_UP] = PATTERN(P_MQTT_UP),
-    [GATEWAY_DIAG_MQTT_DOWN] = PATTERN(P_MQTT_DOWN),
-    [GATEWAY_DIAG_CAN_BUS_OFF] = PATTERN(P_CAN_OFF),
-    [GATEWAY_DIAG_CAN_RECOVERED] = PATTERN(P_CAN_RECOVERED),
-    [GATEWAY_DIAG_LASER_OFFLINE] = PATTERN(P_LASER_OFF),
-    [GATEWAY_DIAG_LASER_RECOVERED] = PATTERN(P_LASER_RECOVERED),
-    [GATEWAY_DIAG_CONFIG_MISMATCH] = PATTERN(P_MISMATCH),
+    [GATEWAY_DIAG_AP_ON] = PATTERN(P_AP_ON, INDICATOR_AP),
+    [GATEWAY_DIAG_AP_OFF] = PATTERN(P_AP_OFF, INDICATOR_AP),
+    [GATEWAY_DIAG_NETWORK_UP] = PATTERN(P_NET_UP, INDICATOR_GREEN),
+    [GATEWAY_DIAG_NETWORK_DOWN] = PATTERN(P_NET_DOWN, INDICATOR_RED),
+    [GATEWAY_DIAG_MQTT_UP] = PATTERN(P_MQTT_UP, INDICATOR_GREEN),
+    [GATEWAY_DIAG_MQTT_DOWN] = PATTERN(P_MQTT_DOWN, INDICATOR_YELLOW),
+    [GATEWAY_DIAG_CAN_BUS_OFF] = PATTERN(P_CAN_OFF, INDICATOR_RED),
+    [GATEWAY_DIAG_CAN_RECOVERED] = PATTERN(P_CAN_RECOVERED, INDICATOR_GREEN),
+    [GATEWAY_DIAG_LASER_OFFLINE] = PATTERN(P_LASER_OFF, INDICATOR_YELLOW),
+    [GATEWAY_DIAG_LASER_RECOVERED] = PATTERN(P_LASER_RECOVERED, INDICATOR_GREEN),
+    [GATEWAY_DIAG_CONFIG_MISMATCH] = PATTERN(P_MISMATCH, INDICATOR_RED_YELLOW),
 };
 
 static const char *event_name(gateway_diagnostic_event_t event)
 {
     static const char *const names[GATEWAY_DIAG_EVENT_COUNT] = {
-        [GATEWAY_DIAG_AP_ON] = "AP_ON SSS",
-        [GATEWAY_DIAG_AP_OFF] = "AP_OFF LL",
-        [GATEWAY_DIAG_NETWORK_UP] = "NETWORK_UP SS",
-        [GATEWAY_DIAG_NETWORK_DOWN] = "NETWORK_DOWN L",
-        [GATEWAY_DIAG_MQTT_UP] = "MQTT_UP SLL",
-        [GATEWAY_DIAG_MQTT_DOWN] = "MQTT_DOWN LSS",
-        [GATEWAY_DIAG_CAN_BUS_OFF] = "CAN_BUS_OFF LSL",
-        [GATEWAY_DIAG_CAN_RECOVERED] = "CAN_RECOVERED SLS",
-        [GATEWAY_DIAG_LASER_OFFLINE] = "LASER_OFFLINE LSSS",
-        [GATEWAY_DIAG_LASER_RECOVERED] = "LASER_RECOVERED SSSL",
-        [GATEWAY_DIAG_CONFIG_MISMATCH] = "CONFIG_MISMATCH SLSL",
+        [GATEWAY_DIAG_AP_ON] = "AP_ON HIGH_X3",
+        [GATEWAY_DIAG_AP_OFF] = "AP_OFF LOW_X2",
+        [GATEWAY_DIAG_NETWORK_UP] = "NETWORK_UP ASCEND_X2",
+        [GATEWAY_DIAG_NETWORK_DOWN] = "NETWORK_DOWN DESCEND_X2",
+        [GATEWAY_DIAG_MQTT_UP] = "MQTT_UP ASCEND_X3",
+        [GATEWAY_DIAG_MQTT_DOWN] = "MQTT_DOWN DESCEND_X3",
+        [GATEWAY_DIAG_CAN_BUS_OFF] = "CAN_BUS_OFF SIREN",
+        [GATEWAY_DIAG_CAN_RECOVERED] = "CAN_RECOVERED HIGH_LOW_HIGH",
+        [GATEWAY_DIAG_LASER_OFFLINE] = "LASER_OFFLINE LOW_X3",
+        [GATEWAY_DIAG_LASER_RECOVERED] = "LASER_RECOVERED HIGH_X3",
+        [GATEWAY_DIAG_CONFIG_MISMATCH] = "CONFIG_MISMATCH HIGH_LOW_X2",
     };
     return event < GATEWAY_DIAG_EVENT_COUNT ? names[event] : "UNKNOWN";
 }
@@ -91,6 +124,20 @@ static uint32_t now_ms(void)
 static uint8_t bit(bsp_do_channel_t channel)
 {
     return (uint8_t)(1U << (uint8_t)channel);
+}
+
+static uint8_t event_indicator_mask(event_indicator_t indicator,
+                                    const gateway_io_mapping_t *io)
+{
+    switch (indicator) {
+    case INDICATOR_AP: return bit(io->ap_status);
+    case INDICATOR_GREEN: return bit(io->tower_green);
+    case INDICATOR_YELLOW: return bit(io->tower_yellow);
+    case INDICATOR_RED: return bit(io->tower_red);
+    case INDICATOR_RED_YELLOW:
+        return (uint8_t)(bit(io->tower_red) | bit(io->tower_yellow));
+    default: return 0U;
+    }
 }
 
 static void commit_output(uint8_t desired, uint8_t *rendered)
@@ -127,6 +174,7 @@ static void output_task(void *argument)
     const buzzer_pattern_t *pattern = NULL;
     uint8_t step = 0;
     bool onboard_rendered = false;
+    uint16_t onboard_frequency_hz = 0U;
 
     for (;;) {
         gateway_diagnostic_event_t event;
@@ -169,24 +217,37 @@ static void output_task(void *argument)
         } else if (!blinking) tower_phase = true;
 
         uint8_t desired = buzzer_on ? bit(io->buzzer) : 0U;
-        if (!network) {
-            if (tower_phase) desired |= bit(io->tower_red);
+        if (pattern != NULL) {
+            /* Trong lúc phát mã sự kiện, tháp đèn chuyển sang màu của sự kiện
+             * và chớp đúng theo từng tiếng còi. Sau khoảng nghỉ cuối, pattern
+             * kết thúc và đèn tự quay lại trạng thái hệ thống bên dưới. */
+            if (buzzer_on) desired |= event_indicator_mask(pattern->indicator, io);
         } else {
-            desired |= bit(io->tower_green);
-            if (!mqtt && tower_phase) desired |= bit(io->tower_yellow);
+            if (!network) {
+                if (tower_phase) desired |= bit(io->tower_red);
+            } else {
+                desired |= bit(io->tower_green);
+                if (!mqtt && tower_phase) desired |= bit(io->tower_yellow);
+            }
         }
-        /* DO8 is the solid local configuration-AP LED, same policy as Callbox. */
-        if (ap_active) desired |= bit(io->ap_status);
+        /* DO8 sáng liên tục khi AP bật, trừ lúc chính DO8 đang phát mã AP. */
+        if (ap_active && (pattern == NULL || pattern->indicator != INDICATOR_AP)) {
+            desired |= bit(io->ap_status);
+        }
         commit_output(desired, &rendered);
         /* DO1 drives the tower buzzer and GPIO46 drives the onboard buzzer.
          * Both are rendered from the same state machine so every pulse starts
          * and ends in the same output tick. */
-        if (buzzer_on != onboard_rendered) {
+        const uint16_t desired_frequency_hz = buzzer_on && pattern != NULL
+            ? pattern->steps[step].frequency_hz : 0U;
+        if (buzzer_on != onboard_rendered ||
+            (buzzer_on && desired_frequency_hz != onboard_frequency_hz)) {
             const esp_err_t error = buzzer_on
-                ? bsp_buzzer_set(ONBOARD_BUZZER_HZ, ONBOARD_BUZZER_DUTY)
+                ? bsp_buzzer_set(desired_frequency_hz, ONBOARD_BUZZER_DUTY)
                 : bsp_buzzer_off();
             if (error == ESP_OK) {
                 onboard_rendered = buzzer_on;
+                onboard_frequency_hz = desired_frequency_hz;
             } else {
                 ESP_LOGE(TAG, "Onboard buzzer update failed: %s",
                          esp_err_to_name(error));
