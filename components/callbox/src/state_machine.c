@@ -277,7 +277,18 @@ static void handle_wcs_command(const protocol_command_t *cmd)
         const bool rejects_cancel = snapshot.Cancel.pending &&
                                     snapshot.CancelTarget == task &&
                                     cmd->ref_seq == snapshot.Cancel.seq;
-        if (!rejects_call && !rejects_cancel) {
+        /* WCS also uses rejected as the terminal result of a transport order
+         * which was already accepted/assigned/locked.  It must match the
+         * mission call sequence, not the separate Cancel transaction. */
+        const bool fails_active_task = !rejects_call && !rejects_cancel &&
+                                       task_state_is_active(snapshot.Mission[task - 1]) &&
+                                       command_matches_call(&snapshot, task, cmd->ref_seq);
+        const char *reason_text = cmd->reason_text[0] != '\0'
+                                      ? cmd->reason_text
+                                      : protocol_reject_reason_name(cmd->reason);
+        const char *order_name = cmd->order_name[0] != '\0'
+                                     ? cmd->order_name : "-";
+        if (!rejects_call && !rejects_cancel && !fails_active_task) {
             ESP_LOGW(TAG, "Ignoring unmatched rejected task=%d ref=%lu", task,
                      (unsigned long)cmd->ref_seq);
             return;
@@ -289,9 +300,9 @@ static void handle_wcs_command(const protocol_command_t *cmd)
              * (WCS có thể báo LOCKED sau reason=locked). */
             status_clear_cancel();
             status_request_feedback(OUTPUT_FEEDBACK_TRANSACTION_FAILED);
-            ESP_LOGW(TAG, "CANCEL rejected task=%d ref=%lu reason=%s",
+            ESP_LOGW(TAG, "CANCEL rejected task=%d ref=%lu reason=%s order=%s agv=%s",
                      task, (unsigned long)cmd->ref_seq,
-                     protocol_reject_reason_name(cmd->reason));
+                     reason_text, order_name, cmd->agv_id);
             /* `locked`, `duplicate`, và `no_task` ngụ ý Callbox và WCS có
              * thể không khớp về snapshot mission, nên đồng bộ lại.
              * `wcs_busy` không đổi trạng thái mission: người vận hành có thể
@@ -300,13 +311,26 @@ static void handle_wcs_command(const protocol_command_t *cmd)
             return;
         }
 
+        if (fails_active_task) {
+            /* Authoritative WCS terminal failure.  Clear this task only: do
+             * not retry automatically and do not disturb the other task. */
+            mission_set_state(task, TASK_IDLE, cmd->timestamp);
+            status_set_tower_warning(task, TOWER_WARNING_ERROR);
+            status_set_task_error(task, mission_now_ms() + TASK_REJECT_FLASH_WINDOW_MS);
+            status_request_feedback(OUTPUT_FEEDBACK_TRANSACTION_FAILED);
+            ESP_LOGE(TAG, "TASK failed task=%d ref=%lu reason=%s order=%s agv=%s",
+                     task, (unsigned long)cmd->ref_seq, reason_text,
+                     order_name, cmd->agv_id);
+            return;
+        }
+
         mission_set_state(task, TASK_IDLE, cmd->timestamp);
         status_set_tower_warning(task, TOWER_WARNING_ERROR);
         status_set_task_error(task, mission_now_ms() + TASK_REJECT_FLASH_WINDOW_MS);
         status_request_feedback(OUTPUT_FEEDBACK_TRANSACTION_FAILED);
-        ESP_LOGW(TAG, "CALL rejected task=%d ref=%lu reason=%s", task,
+        ESP_LOGW(TAG, "CALL rejected task=%d ref=%lu reason=%s order=%s agv=%s", task,
                  (unsigned long)cmd->ref_seq,
-                 protocol_reject_reason_name(cmd->reason));
+                 reason_text, order_name, cmd->agv_id);
         /* CALL trùng lặp có thể nghĩa là WCS đã cam kết một lần giao hàng
          * trước đó. Đồng bộ lại thay vì tin vào hiển thị lỗi cục bộ. */
         if (cmd->reason == REJECT_REASON_DUPLICATE) begin_wcs_sync();

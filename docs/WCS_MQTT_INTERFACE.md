@@ -39,7 +39,7 @@ SSID AP có thể là CALLBOX-001-A1B2C3 để phân biệt phần cứng. Nó k
 | Thuộc tính | Contract hiện tại |
 |---|---|
 | QoS | 1 cho event, command và status |
-| Heartbeat | 15 giây |
+| Heartbeat | 1 giây |
 | MQTT keepalive | 30 giây |
 | MQTT reconnect timeout | 5 giây |
 | Network timeout | 10 giây |
@@ -142,6 +142,10 @@ CANCEL bị từ chối:
 
 CallBox xác định rejected thuộc CALL hay CANCEL bằng transaction pending có seq khớp. Rejected CALL làm xóa pending, Mission về idle và báo lỗi. Rejected CANCEL không tự đưa Mission về idle: WCS vẫn authoritative. Với cancel reason locked, duplicate hoặc no_task CallBox yêu cầu sync lại; wcs_busy chỉ báo lỗi local để có thể thử lại sau.
 
+WCS cũng dùng `rejected` để kết thúc một transport order đã được accepted/assigned/locked. Khi `task` đang active và `ref_seq` khớp CALL seq gốc (không phải Cancel seq), CallBox coi đây là task failure authoritative: chỉ task đó về `idle`, phát feedback lỗi, ghi `reason`, `order_name`, `agv_id`, không tự retry CALL và không ảnh hưởng task còn lại. Ví dụ:
+
+    {"type":"rejected","task":1,"ref_seq":1042,"reason":"TransportOrder ended in state WITHDRAWN/FAILED/UNROUTABLE","order_name":"CB-001-1042-CALL_EMPTY","agv_id":"AGV-01","ts":1751791900}
+
 ### overdue
 
     {"type":"overdue","task":1,"ref_seq":1042,"ts":1751791960}
@@ -168,14 +172,12 @@ Matching sync overwrite/reconcile cả hai task, xóa local CALL/CANCEL stale v�
 
 ### Retry và timeout của sync_request
 
-CallBox tạo persistent seq mới khi bắt đầu một sync transaction. Cùng transaction retry sau khoảng 5 giây và 10 giây, giữ nguyên seq. Tại khoảng 15 giây transaction hết hạn; nếu MQTT còn kết nối, CallBox tạo transaction sync **mới** với seq mới.
+CallBox tạo một persistent seq khi bắt đầu sync transaction. Khi WCS chưa phản hồi, CallBox giữ nguyên transaction và retry cùng seq với backoff 5 → 10 → 20 → 40 giây, sau đó tối đa 300 giây mỗi lần. Không tạo seq mới hoặc ghi NVS mới chỉ vì WCS im lặng. WCS phải deduplicate retry cùng seq và có thể trả snapshot authoritative cho bất kỳ retry nào.
 
     t≈0 s:  sync_request seq=2001
     t≈5 s:  retry sync_request seq=2001
-    t≈10 s: retry sync_request seq=2001
-    t≈15 s: seq=2001 expire; new sync_request seq=2002
-
-WCS phải deduplicate retry cùng seq nhưng trả snapshot authoritative cho mỗi transaction sync mới. Khi current request đã là seq=2002, sync đến muộn ref_seq=2001 bị bỏ qua.
+    t≈15 s: retry sync_request seq=2001
+    t≈35 s: retry sync_request seq=2001
 
 ## 7. Status, online và LWT
 
@@ -196,6 +198,8 @@ Status retained đi lên callbox/{id}/status:
 comm có offline, syncing hoặc ready. task có idle, queued, assigned, locked, completed.
 
 Heartbeat/status hiện tại không có agv_id, mission_id hoặc CallSequence. Correlation dùng seq/ref_seq; identity/state đầy đủ được khôi phục qua sync snapshot.
+
+Trong lúc người dùng vừa gửi `call` nhưng WCS chưa trả `accepted`/`rejected`, transaction nội bộ là pending và LED task nháy chậm, nhưng status vẫn giữ `taskN:"idle"`. Chỉ WCS mới có quyền chuyển status task sang `queued` bằng `accepted`.
 
 online=true không đồng nghĩa buttons đã vận hành: online=true + comm=syncing nghĩa MQTT lên nhưng CallBox vẫn chờ WCS sync. Dashboard nên hiển thị riêng online và operational-ready.
 
@@ -303,7 +307,7 @@ Các mục dưới đây là kế hoạch nghiệm thu, chưa được đánh d�
 | IT-18 | reconnect | broker lên | trả sync | sync_request phát |
 | IT-19 | wrong sync | syncing | sync ref sai | ignored |
 | IT-20 | valid sync | syncing | snapshot hai task | Comm ready |
-| IT-21 | heartbeat | online | consume status | mỗi 15 s, retained |
+| IT-21 | heartbeat | online | consume status | mỗi 1 s, retained |
 | IT-22 | LWT | mất kết nối đột ngột | consume retained LWT | online=false tối giản |
 | IT-23 | broker restart | restart broker | reconnect/sync | state reconciled |
 | IT-24 | CallBox reboot active | reboot device | trả sync | state restored |

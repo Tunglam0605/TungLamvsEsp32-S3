@@ -58,7 +58,7 @@ Topics QoS 1:
     callbox/{id}/cmd     WCS → CallBox
     callbox/{id}/status  CallBox → WCS, retained
 
-Client ID là AUBOT-Callbox-{id}; heartbeat 15 giây, keepalive 30 giây, LWT retained là {"online":false}. JSON, correlation seq/ref_seq, retry, sync và trách nhiệm backend nằm trong [đặc tả MQTT/WCS](docs/WCS_MQTT_INTERFACE.md).
+Client ID là AUBOT-Callbox-{id}; heartbeat 1 giây theo yêu cầu WCS, keepalive 30 giây, LWT retained là {"online":false}. JSON, correlation seq/ref_seq, retry, sync và trách nhiệm backend nằm trong [đặc tả MQTT/WCS](docs/WCS_MQTT_INTERFACE.md).
 
 ## Network, AP và portal
 

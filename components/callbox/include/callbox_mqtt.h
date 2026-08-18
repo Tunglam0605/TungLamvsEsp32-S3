@@ -57,7 +57,7 @@
 #define MQTT_QoS 1
 
 /* Khoảng thời gian heartbeat (giây) */
-#define HEARTBEAT_INTERVAL_SEC 15
+#define HEARTBEAT_INTERVAL_SEC 1
 
 typedef struct {
     char topic[256];

@@ -155,7 +155,7 @@ bằng **seq của cancel** (không phải seq của call):
 
 ## 6. Status/heartbeat
 
-Callbox publish retained status mỗi 15 giây:
+Callbox publish retained status mỗi 1 giây:
 
 ```json
 {
@@ -188,4 +188,4 @@ Callbox publish retained status mỗi 15 giây:
 - [ ] Status chuyển từ `syncing` sang `ready`.
 - [ ] Nhấn Task 1/2, WCS nhận được event `call` và phản hồi theo các bước.
 - [ ] Nhấn Hủy, WCS trả `cancel_ack` hoặc `rejected` đúng `ref_seq`.
-- [ ] Kiểm tra heartbeat retained mỗi 15 giây và LWT offline khi Callbox mất kết nối.
+- [ ] Kiểm tra heartbeat retained mỗi 1 giây và LWT offline khi Callbox mất kết nối.

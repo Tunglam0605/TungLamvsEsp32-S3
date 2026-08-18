@@ -117,10 +117,12 @@ bool protocol_parse_command_json(const char *payload, protocol_command_t *comman
     (void)json_read_u32(payload, "ref_seq", &command->ref_seq);
     (void)json_read_u32(payload, "ts", &command->timestamp);
     (void)json_read_string(payload, "agv_id", command->agv_id, sizeof(command->agv_id));
-    char reason[16] = {0};
-    if (json_read_string(payload, "reason", reason, sizeof(reason))) {
-        command->reason = reject_reason_from_string(reason);
+    if (json_read_string(payload, "reason", command->reason_text,
+                         sizeof(command->reason_text))) {
+        command->reason = reject_reason_from_string(command->reason_text);
     }
+    (void)json_read_string(payload, "order_name", command->order_name,
+                           sizeof(command->order_name));
 
     if (command->type == PROTOCOL_CMD_SYNC) {
         char state[16] = {0};

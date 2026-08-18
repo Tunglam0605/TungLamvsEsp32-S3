@@ -34,6 +34,12 @@ typedef enum {
     REJECT_REASON_WCS_BUSY,
 } reject_reason_t;
 
+/* WCS may provide a human-readable terminal failure from its transport-order
+ * engine.  Keep the original text for diagnostic logs; the enum above remains
+ * only a convenience for the short legacy reasons. */
+#define PROTOCOL_REJECT_REASON_TEXT_MAX 128U
+#define PROTOCOL_ORDER_NAME_MAX          96U
+
 typedef struct {
     protocol_command_type_t type;
     int task;
@@ -42,6 +48,8 @@ typedef struct {
     char agv_id[32];
     /* Chẩn đoán từ chối có cấu trúc (tùy chọn) từ WCS. */
     reject_reason_t reason;
+    char reason_text[PROTOCOL_REJECT_REASON_TEXT_MAX];
+    char order_name[PROTOCOL_ORDER_NAME_MAX];
     /* Chỉ hợp lệ với type=sync. WCS cung cấp cả hai snapshot có thẩm quyền. */
     TaskState_t sync_state[2];
     uint32_t sync_call_seq[2];
