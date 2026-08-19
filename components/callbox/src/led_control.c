@@ -29,6 +29,7 @@ static int s_tower_color;
 static LEDState_t s_tower_state = LED_OFF;
 static bool s_tower_phase;
 static TickType_t s_tower_last_toggle;
+static uint8_t s_tower_double_step;
 static uint8_t s_tick_error_streak;
 static TickType_t s_tick_last_error_log;
 
@@ -36,6 +37,9 @@ static TickType_t s_tick_last_error_log;
 #define BUTTON_BLINK_FAST_MS 150U
 #define TOWER_BLINK_SLOW_MS  500U
 #define TOWER_BLINK_FAST_MS  250U
+#define TOWER_DOUBLE_ON_MS    180U
+#define TOWER_DOUBLE_GAP_MS   180U
+#define TOWER_DOUBLE_PAUSE_MS 1000U
 
 static esp_err_t do_write(bsp_do_channel_t channel, bool active)
 {
@@ -209,11 +213,21 @@ esp_err_t led_control_tick(void)
         s_button_last_toggle[i] = now;
     }
 
-    const uint32_t tower_interval_ms = s_tower_state == LED_BLINK_FAST ?
-                                       TOWER_BLINK_FAST_MS :
-                                       s_tower_state == LED_BLINK_SLOW ? TOWER_BLINK_SLOW_MS : 0U;
+    uint32_t tower_interval_ms = s_tower_state == LED_BLINK_FAST ?
+                                     TOWER_BLINK_FAST_MS :
+                                 s_tower_state == LED_BLINK_SLOW ?
+                                     TOWER_BLINK_SLOW_MS : 0U;
+    if (s_tower_state == LED_BLINK_DOUBLE) {
+        tower_interval_ms = s_tower_double_step == 3U ? TOWER_DOUBLE_PAUSE_MS :
+                            s_tower_double_step == 1U ? TOWER_DOUBLE_GAP_MS :
+                                                         TOWER_DOUBLE_ON_MS;
+    }
     if (tower_interval_ms && now - s_tower_last_toggle >= pdMS_TO_TICKS(tower_interval_ms)) {
-        const bool next_phase = !s_tower_phase;
+        bool next_phase = !s_tower_phase;
+        if (s_tower_state == LED_BLINK_DOUBLE) {
+            s_tower_double_step = (uint8_t)((s_tower_double_step + 1U) % 4U);
+            next_phase = s_tower_double_step == 0U || s_tower_double_step == 2U;
+        }
         const esp_err_t err = do_write(tower_channel(s_tower_color), next_phase);
         if (err != ESP_OK) {
             if (first_error == ESP_OK) first_error = err;
@@ -243,6 +257,7 @@ esp_err_t set_tower_light(int color, LEDState_t state)
     s_tower_color = color;
     s_tower_state = state;
     s_tower_phase = initial_phase;
+    s_tower_double_step = 0U;
     s_tower_last_toggle = xTaskGetTickCount();
     return ESP_OK;
 }

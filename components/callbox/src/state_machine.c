@@ -209,6 +209,15 @@ static bool command_matches_call(const callbox_status_t *snapshot,
            snapshot->CallSequence[task_id - 1] == ref_seq;
 }
 
+/* A reject/failure of one task is still reported locally, but must not leave
+ * a latent red tower warning behind when the other WCS-confirmed task is
+ * operating.  That task owns the tower indication until it completes. */
+static bool other_task_is_active(const callbox_status_t *snapshot, int task_id)
+{
+    if (snapshot == NULL || task_id < 1 || task_id > 2) return false;
+    return task_state_is_active(snapshot->Mission[task_id == 1 ? 1 : 0]);
+}
+
 static void handle_wcs_command(const protocol_command_t *cmd)
 {
     const int task = cmd->task;
@@ -315,7 +324,9 @@ static void handle_wcs_command(const protocol_command_t *cmd)
             /* Authoritative WCS terminal failure.  Clear this task only: do
              * not retry automatically and do not disturb the other task. */
             mission_set_state(task, TASK_IDLE, cmd->timestamp);
-            status_set_tower_warning(task, TOWER_WARNING_ERROR);
+            if (!other_task_is_active(&snapshot, task)) {
+                status_set_tower_warning(task, TOWER_WARNING_ERROR);
+            }
             status_set_task_error(task, mission_now_ms() + TASK_REJECT_FLASH_WINDOW_MS);
             status_request_feedback(OUTPUT_FEEDBACK_TRANSACTION_FAILED);
             ESP_LOGE(TAG, "TASK failed task=%d ref=%lu reason=%s order=%s agv=%s",
@@ -325,7 +336,9 @@ static void handle_wcs_command(const protocol_command_t *cmd)
         }
 
         mission_set_state(task, TASK_IDLE, cmd->timestamp);
-        status_set_tower_warning(task, TOWER_WARNING_ERROR);
+        if (!other_task_is_active(&snapshot, task)) {
+            status_set_tower_warning(task, TOWER_WARNING_ERROR);
+        }
         status_set_task_error(task, mission_now_ms() + TASK_REJECT_FLASH_WINDOW_MS);
         status_request_feedback(OUTPUT_FEEDBACK_TRANSACTION_FAILED);
         ESP_LOGW(TAG, "CALL rejected task=%d ref=%lu reason=%s order=%s agv=%s", task,
@@ -460,6 +473,8 @@ static void publish_output_snapshot(void)
         .call_pending = { status_snapshot.Call[0].pending,
                           status_snapshot.Call[1].pending },
         .cancel_pending = status_snapshot.Cancel.pending,
+        .uplink_available = network_link_is_connected(),
+        .mqtt_connected = mqtt_is_connected() != 0U,
         .comm_state = status_snapshot.CommState,
         .tower_warning = status_snapshot.TowerWarning,
         .task_error_until_ms = { status_snapshot.TaskErrorUntilMs[0],

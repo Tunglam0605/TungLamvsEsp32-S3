@@ -14,6 +14,8 @@ typedef enum {
     LED_ON,
     LED_BLINK_SLOW,
     LED_BLINK_FAST,
+    /* Hai nháy ngắn rồi một khoảng nghỉ dài, dành cho trạng thái WCS sync. */
+    LED_BLINK_DOUBLE,
     LED_FLASH_2,
     LED_FLASH_3,
 } LEDState_t;

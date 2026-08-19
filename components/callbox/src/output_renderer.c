@@ -22,6 +22,7 @@ static QueueHandle_t s_snapshot_queue;
 #define OUTPUT_RETRY_MAX_MS          5000U
 #define OUTPUT_BUS_RECOVERY_THRESHOLD   3U
 #define OUTPUT_BUS_RECOVERY_INTERVAL_MS 30000U
+#define NETWORK_ALERT_REMINDER_MS       60000U
 
 typedef struct {
     LEDState_t button[3];
@@ -44,6 +45,19 @@ static output_apply_state_t s_apply = {
     .retry_delay_ms = OUTPUT_RETRY_INITIAL_MS,
 };
 
+typedef enum {
+    TRANSPORT_ALERT_NO_UPLINK = 0,
+    TRANSPORT_ALERT_MQTT_OFFLINE,
+    TRANSPORT_ALERT_SYNCING,
+    TRANSPORT_ALERT_READY,
+} transport_alert_t;
+
+static struct {
+    bool initialized;
+    transport_alert_t state;
+    uint32_t last_beep_ms;
+} s_transport_alert;
+
 static uint32_t renderer_now_ms(void)
 {
     return (uint32_t)(esp_timer_get_time() / 1000ULL);
@@ -52,6 +66,43 @@ static uint32_t renderer_now_ms(void)
 static bool time_before(uint32_t now_ms, uint32_t until_ms)
 {
     return until_ms != 0U && (int32_t)(until_ms - now_ms) > 0;
+}
+
+static transport_alert_t transport_alert_from_snapshot(const app_output_snapshot_t *snapshot)
+{
+    if (!snapshot->uplink_available) return TRANSPORT_ALERT_NO_UPLINK;
+    if (!snapshot->mqtt_connected) return TRANSPORT_ALERT_MQTT_OFFLINE;
+    if (snapshot->comm_state != COMM_READY) return TRANSPORT_ALERT_SYNCING;
+    return TRANSPORT_ALERT_READY;
+}
+
+/* The tower buzzer is relay-driven: distinguish network faults by pulse count
+ * and duration, never frequency.  It signals transitions and sparse reminders
+ * only, so a persistent fault does not create continuous factory noise. */
+static void apply_transport_buzzer(transport_alert_t state, uint32_t now_ms)
+{
+    if (!s_transport_alert.initialized) {
+        s_transport_alert.initialized = true;
+        s_transport_alert.state = state;
+        s_transport_alert.last_beep_ms = now_ms;
+        return;
+    }
+
+    const bool changed = state != s_transport_alert.state;
+    const bool reminder_due = !changed && state != TRANSPORT_ALERT_READY &&
+                              (uint32_t)(now_ms - s_transport_alert.last_beep_ms) >=
+                                  NETWORK_ALERT_REMINDER_MS;
+    if (!changed && !reminder_due) return;
+
+    if (state == TRANSPORT_ALERT_NO_UPLINK) {
+        buzzer_beep(1, 700);
+    } else if (state == TRANSPORT_ALERT_MQTT_OFFLINE) {
+        buzzer_beep(2, 120);
+    } else if (state == TRANSPORT_ALERT_READY && changed) {
+        buzzer_beep(2, 100);
+    }
+    s_transport_alert.state = state;
+    s_transport_alert.last_beep_ms = now_ms;
 }
 
 static LEDState_t task_led_state(const app_output_snapshot_t *snapshot, int task,
@@ -166,17 +217,35 @@ static void render_snapshot(const app_output_snapshot_t *snapshot)
          snapshot->mission[1] == TASK_QUEUED || snapshot->mission[1] == TASK_ASSIGNED) ? LED_ON : LED_OFF,
     };
 
-    const bool comm_not_ready = snapshot->comm_state != COMM_READY;
     const bool mission_active = snapshot->call_pending[0] || snapshot->call_pending[1] ||
                                 snapshot->cancel_pending || snapshot->mission[0] != TASK_IDLE ||
                                 snapshot->mission[1] != TASK_IDLE;
-    /* WCS is authoritative. Until its sync snapshot completes, Callbox must
-     * visibly remain unavailable even when the MQTT transport is connected. */
-    const int tower_color = comm_not_ready ? 1 :
+    /* A WCS-confirmed mission must remain visually dominant over an error from
+     * the other task.  Example: Task 1 is ASSIGNED while Task 2 is rejected;
+     * the tower stays yellow for Task 1 and Task 2 reports its error locally
+     * through its button LED and the buzzer. */
+    const bool confirmed_mission_active =
+        snapshot->mission[0] == TASK_QUEUED || snapshot->mission[0] == TASK_ASSIGNED ||
+        snapshot->mission[0] == TASK_LOCKED || snapshot->mission[1] == TASK_QUEUED ||
+        snapshot->mission[1] == TASK_ASSIGNED || snapshot->mission[1] == TASK_LOCKED;
+    const transport_alert_t transport_alert = transport_alert_from_snapshot(snapshot);
+    apply_transport_buzzer(transport_alert, now_ms);
+    /* Transport faults have priority over Mission output: red fast means no
+     * uplink, red slow means broker unreachable, red double means WCS sync. */
+    const int tower_color = transport_alert == TRANSPORT_ALERT_READY ?
+                            confirmed_mission_active ? 2 :
                             snapshot->tower_warning == TOWER_WARNING_ERROR ? 1 :
                             snapshot->tower_warning == TOWER_WARNING_OVERDUE ? 2 :
-                            mission_active ? 2 : 3;
-    const LEDState_t tower_state = comm_not_ready ? LED_BLINK_SLOW :
+                            mission_active ? 2 : 3 : 1;
+    const LEDState_t tower_state = transport_alert == TRANSPORT_ALERT_NO_UPLINK ?
+                                       LED_BLINK_FAST :
+                                   transport_alert == TRANSPORT_ALERT_MQTT_OFFLINE ?
+                                       LED_BLINK_SLOW :
+                                   transport_alert == TRANSPORT_ALERT_SYNCING ?
+                                       LED_BLINK_DOUBLE :
+                                   confirmed_mission_active &&
+                                       snapshot->tower_warning == TOWER_WARNING_OVERDUE ? LED_BLINK_SLOW :
+                                   confirmed_mission_active ? LED_ON :
                                    snapshot->tower_warning == TOWER_WARNING_ERROR ? LED_ON :
                                    snapshot->tower_warning == TOWER_WARNING_OVERDUE ? LED_BLINK_SLOW :
                                    LED_ON;

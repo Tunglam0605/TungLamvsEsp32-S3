@@ -15,6 +15,8 @@ typedef struct {
     TaskState_t mission[2];
     bool call_pending[2];
     bool cancel_pending;
+    bool uplink_available;
+    bool mqtt_connected;
     comm_state_t comm_state;
     tower_warning_t tower_warning;
     uint32_t task_error_until_ms[2];
