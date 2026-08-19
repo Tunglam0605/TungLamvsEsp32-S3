@@ -60,6 +60,12 @@ Topics QoS 1:
 
 Client ID là AUBOT-Callbox-{id}; heartbeat 1 giây theo yêu cầu WCS, keepalive 30 giây, LWT retained là {"online":false}. JSON, correlation seq/ref_seq, retry, sync và trách nhiệm backend nằm trong [đặc tả MQTT/WCS](docs/WCS_MQTT_INTERFACE.md).
 
+## Mã hiệu tháp đèn và còi relay
+
+DO1 là còi relay, vì vậy firmware mã hóa cảnh báo bằng số nhịp/độ dài nhịp, không dùng tần số. Đỏ nháy nhanh 250 ms nghĩa là mất cả Wi-Fi STA lẫn Ethernet; đỏ nháy chậm 500 ms nghĩa là vẫn có uplink nhưng MQTT broker không hoạt động; đỏ nháy kép `180 ms ON → 180 ms OFF → 180 ms ON → nghỉ 1 giây` nghĩa là MQTT đã lên nhưng đang chờ WCS `sync`. Đỏ sáng là lỗi reject/FAILED khi không còn task nào active. Vàng sáng là task queued/assigned/locked, vàng nháy chậm là overdue, xanh sáng là ready/idle.
+
+Khi vừa mất toàn bộ uplink, DO1 kêu một nhịp 700 ms; khi mất MQTT với uplink còn sống, DO1 kêu hai nhịp 120 ms. Hai cảnh báo được nhắc lại tối đa mỗi 60 giây. Khi Callbox chuyển sang ready, DO1 kêu hai nhịp 100 ms. Reject/FAILED vẫn giữ một nhịp lỗi 650 ms; nếu task còn lại active, tháp giữ vàng và chỉ LED của task lỗi nháy ba lần.
+
 ## Network, AP và portal
 
 - Uplink là Wi-Fi STA hoặc W5500 Ethernet; MQTT không đổi theo uplink.

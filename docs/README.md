@@ -4,6 +4,7 @@
 |---|---|
 | [WCS_MQTT_INTERFACE.md](WCS_MQTT_INTERFACE.md) | **Primary integration contract** cho IT/WCS/backend |
 | [SECURITY.md](SECURITY.md) | Profile production, credential, key và quy trình eFuse/NVS |
+| [CALLBOX_MQTT_WCS_TEST_GUIDE.md](CALLBOX_MQTT_WCS_TEST_GUIDE.md) | Quy trình test MQTT/WCS và mã hiệu tháp đèn/còi |
 | Giao tiep MQTT TCP Bo goi WCS.docx | Tài liệu tham khảo/historical |
 | Phuong_an_Bo_goi_AGV_SEW_20260706.docx | Tài liệu tham khảo/historical |
 

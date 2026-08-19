@@ -181,6 +181,12 @@ CallBox tạo một persistent seq khi bắt đầu sync transaction. Khi WCS ch
 
 ## 7. Status, online và LWT
 
+### Mã hiệu vận hành tháp đèn
+
+Mã hiệu là feedback tại thiết bị, không làm thay đổi contract MQTT. Đỏ nháy nhanh 250 ms nghĩa là không còn Wi-Fi STA hoặc Ethernet có IP. Đỏ nháy chậm 500 ms nghĩa là uplink còn nhưng MQTT broker không hoạt động. Đỏ nháy kép `180 ms ON → 180 ms OFF → 180 ms ON → nghỉ 1 giây` nghĩa là MQTT đã subscribe nhưng đang chờ `sync` WCS. Đỏ sáng là reject/FAILED khi không có task nào khác active. Vàng sáng là task queued/assigned/locked; vàng nháy chậm là overdue; xanh sáng là ready/idle.
+
+DO1 là còi relay: mất uplink 1×700 ms, mất MQTT 2×120 ms, ready 2×100 ms; alert mạng chỉ phát khi chuyển trạng thái và nhắc lại sau 60 giây. Reject/FAILED phát 1×650 ms. Khi một task bị reject nhưng task còn lại active, tháp giữ vàng và chỉ LED task lỗi nháy ba lần.
+
 Status retained đi lên callbox/{id}/status:
 
     {

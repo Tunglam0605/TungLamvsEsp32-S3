@@ -34,9 +34,9 @@ Cancel chỉ queued/assigned; khi cả hai hợp lệ, chọn CallSequence lớn
 
 io_handler sample 10 ms; debounce 100 ms; guard 300 ms. button_gate là lớp admission trước Mission, vì vậy spam/giữ nút không tạo nhiều transaction.
 
-Output Renderer chỉ nhận snapshot read-only, derive LED/tower/buzzer và không mutate Mission/Comm/pending. LED task pending blink chậm; queued/assigned/locked ON; idle OFF; reject FLASH_3. Tower ưu tiên: Comm chưa ready đỏ blink → error đỏ → overdue vàng blink → mission active vàng → ready idle xanh.
+Output Renderer chỉ nhận snapshot read-only, derive LED/tower/buzzer và không mutate Mission/Comm/pending. LED task pending blink chậm; queued/assigned/locked ON; idle OFF; reject FLASH_3. Tower ưu tiên transport: không uplink đỏ nháy nhanh 250 ms → MQTT offline đỏ nháy chậm 500 ms → MQTT lên/chờ sync đỏ nháy kép (180/180/180 ms rồi nghỉ 1 s) → error đỏ → overdue vàng blink → mission active vàng → ready idle xanh. Một task reject không được che vàng của task còn lại đang active.
 
-DO1 là business buzzer: call 100 ms, assigned 100 ms, config saved 120 ms, cancel ACK 150 ms, transaction failure 650 ms. GPIO46 là feedback network riêng.
+DO1 là relay buzzer: call 100 ms, assigned 100 ms, config saved 120 ms, cancel ACK 150 ms, transaction failure 650 ms; mất toàn bộ uplink 1×700 ms, mất MQTT 2×120 ms, ready 2×100 ms. Cảnh báo uplink/MQTT chỉ bíp khi chuyển trạng thái và tối đa nhắc lại mỗi 60 giây. GPIO46 vẫn là feedback Wi-Fi cục bộ riêng.
 
 ## MQTT, uplink và portal
 

@@ -179,7 +179,20 @@ Callbox publish retained status mỗi 1 giây:
 | `syncing` | MQTT đã kết nối, đang chờ WCS trả `sync`. |
 | `offline` | Mất MQTT/WCS. |
 
-## 7. Checklist nghiệm thu IT
+## 7. Mã hiệu vận hành tại Callbox
+
+| Điều kiện | Tháp đèn | Còi relay DO1 |
+|---|---|---|
+| Mất cả Wi-Fi STA và Ethernet | Đỏ nháy nhanh 250 ms | 1 × 700 ms khi chuyển trạng thái, nhắc lại 60 giây |
+| Có uplink nhưng MQTT broker không hoạt động | Đỏ nháy chậm 500 ms | 2 × 120 ms khi chuyển trạng thái, nhắc lại 60 giây |
+| MQTT đã subscribe, chờ WCS `sync` | Đỏ nháy kép 180/180/180 ms, nghỉ 1 giây | Không bíp lặp |
+| `ready`, cả hai task idle | Xanh sáng | 2 × 100 ms khi vừa vào ready |
+| Có task queued/assigned/locked | Vàng sáng | Không có mã mạng lặp |
+| Task overdue | Vàng nháy chậm | Không bíp lặp |
+| Reject/FAILED khi không có task khác active | Đỏ sáng | 1 × 650 ms |
+| Reject một task khi task còn lại active | Giữ vàng | LED task lỗi nháy 3 lần + 1 × 650 ms |
+
+## 8. Checklist nghiệm thu IT
 
 - [ ] Broker chấp nhận kết nối TCP 1883 từ mạng của Callbox.
 - [ ] ACL cho phép cả event, status và cmd đúng theo ID thiết bị.
