@@ -37,6 +37,6 @@ idf_component_register(SRCS "src/protocol_types.c"
                     PRIV_INCLUDE_DIRS "private_include"
                     EMBED_FILES "company-logo-transparent.png"
                     REQUIRES freertos platform_nvs bsp esp_timer platform_wifi
-                             mqtt mbedtls platform_time esp_http_server
+                             platform_ota mqtt mbedtls platform_time esp_http_server
                              esp_netif lwip esp_system esp_common esp_hw_support
                              bootloader_support)

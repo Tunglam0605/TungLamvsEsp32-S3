@@ -66,6 +66,7 @@
 #include "sequence_service.h"
 #include "app_event_queue.h"
 #include "time_sync.h"
+#include "platform_ota.h"
 
 static const char *TAG = "MAIN";
 
@@ -226,6 +227,15 @@ static void start_config_portal_when_ap_is_ready(void)
     }
 }
 
+static void ota_verify_task(void *pvParameters)
+{
+    (void)pvParameters;
+    vTaskDelay(pdMS_TO_TICKS(15000));
+    ESP_LOGI(TAG, "Self-test period elapsed. Confirming running OTA firmware slot as healthy...");
+    platform_ota_mark_valid();
+    vTaskDelete(NULL);
+}
+
 void callbox_app_run(void)
 {
     ESP_LOGI(TAG, "Starting Callbox SEWS Application");
@@ -236,6 +246,9 @@ void callbox_app_run(void)
         ESP_LOGE(TAG, "Failed to initialize NVS: %s", esp_err_to_name(ret));
         return;
     }
+
+    /* Khởi tạo Subsystem OTA (kiểm tra phân vùng và trạng thái rollback) */
+    platform_ota_init();
 
     /* Bước 2: nạp cấu hình đã lưu (hoặc factory default) vào g_config */
     if (!load_config_from_nvs()) {
@@ -322,6 +335,9 @@ void callbox_app_run(void)
     xTaskCreate(io_handler_task, "io_handler", 2048, NULL, 5, NULL);
     xTaskCreate(state_machine_task, "state_machine", 3072, NULL, 10, NULL);
     xTaskCreate(mqtt_communication_task, "mqtt_comm", 4096, NULL, 8, NULL);
+
+    /* Tự động xác nhận hình ảnh OTA sau khi hệ thống hoạt động ổn định */
+    xTaskCreate(ota_verify_task, "ota_verify", 2048, NULL, 3, NULL);
 
     ESP_LOGI(TAG, "All tasks created and running");
 

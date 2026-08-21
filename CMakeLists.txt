@@ -8,7 +8,8 @@ cmake_minimum_required(VERSION 3.22)
 set(EXTRA_COMPONENT_DIRS components/drivers/tca9554
                         components/platform/platform_nvs
                         components/platform/platform_time
-                        components/platform/platform_wifi)
+                        components/platform/platform_wifi
+                        components/platform/platform_ota)
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(callbox_sews)

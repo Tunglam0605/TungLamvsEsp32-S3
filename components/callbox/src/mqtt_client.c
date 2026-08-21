@@ -24,6 +24,7 @@
 #include "status.h"
 #include "wifi_init.h"
 #include "time_sync.h"
+#include "platform_ota.h"
 
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -151,8 +152,88 @@ static const char *mqtt_comm_state_name(comm_state_t state)
     }
 }
 
+static void mqtt_ota_progress_callback(int percent, size_t written, size_t total, void *ctx)
+{
+    (void)ctx;
+    char topic[96];
+    snprintf(topic, sizeof(topic), "callbox/%s/ota/status", s_config.callbox_id);
+    char payload[160];
+    if (percent < 0) {
+        snprintf(payload, sizeof(payload), "{\"status\":\"failed\",\"progress\":-1}");
+    } else if (percent >= 100) {
+        snprintf(payload, sizeof(payload), "{\"status\":\"rebooting\",\"progress\":100}");
+    } else {
+        snprintf(payload, sizeof(payload), "{\"status\":\"downloading\",\"progress\":%d,\"written\":%u,\"total\":%u}",
+                 percent, (unsigned)written, (unsigned)total);
+    }
+    MQTTMsg_t msg = {0};
+    strncpy(msg.topic, topic, sizeof(msg.topic) - 1);
+    strncpy(msg.payload, payload, sizeof(msg.payload) - 1);
+    msg.qos = 1;
+    msg.retain = false;
+    if (s_publish_queue) {
+        xQueueSend(s_publish_queue, &msg, 0);
+    }
+}
+
+static void mqtt_handle_ota_command(const char *payload)
+{
+    const char *url_key = strstr(payload, "\"url\":");
+    if (!url_key) url_key = strstr(payload, "\"url\" :");
+    if (!url_key) {
+        ESP_LOGW(TAG, "OTA command missing 'url' field");
+        return;
+    }
+    const char *quote1 = strchr(url_key + 6, '\"');
+    if (!quote1) return;
+    const char *quote2 = strchr(quote1 + 1, '\"');
+    if (!quote2) return;
+
+    char url[256] = {0};
+    size_t url_len = quote2 - quote1 - 1;
+    if (url_len >= sizeof(url)) url_len = sizeof(url) - 1;
+    strncpy(url, quote1 + 1, url_len);
+    url[url_len] = '\0';
+
+    if (status.Mission[0] != TASK_IDLE || status.Mission[1] != TASK_IDLE) {
+        ESP_LOGW(TAG, "Rejecting OTA upgrade: missions currently in progress");
+        char topic[96];
+        snprintf(topic, sizeof(topic), "callbox/%s/ota/status", s_config.callbox_id);
+        MQTTMsg_t msg = {0};
+        strncpy(msg.topic, topic, sizeof(msg.topic) - 1);
+        strcpy(msg.payload, "{\"status\":\"rejected\",\"reason\":\"mission_active\"}");
+        msg.qos = 1;
+        if (s_publish_queue) xQueueSend(s_publish_queue, &msg, 0);
+        return;
+    }
+
+    ESP_LOGI(TAG, "Starting Fleet Remote OTA upgrade from URL: %s", url);
+    esp_err_t err = platform_ota_start_from_url(url, mqtt_ota_progress_callback, NULL);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initiate URL OTA: %s", esp_err_to_name(err));
+        char topic[96];
+        snprintf(topic, sizeof(topic), "callbox/%s/ota/status", s_config.callbox_id);
+        MQTTMsg_t msg = {0};
+        strncpy(msg.topic, topic, sizeof(msg.topic) - 1);
+        snprintf(msg.payload, sizeof(msg.payload) - 1, "{\"status\":\"error\",\"error\":\"%s\"}", esp_err_to_name(err));
+        msg.qos = 1;
+        if (s_publish_queue) xQueueSend(s_publish_queue, &msg, 0);
+    }
+}
+
 static void mqtt_handle_command(const char *topic, const char *payload)
 {
+    char ota_specific_topic[96];
+    snprintf(ota_specific_topic, sizeof(ota_specific_topic), "callbox/%s/cmd/ota", s_config.callbox_id);
+
+    if (strcmp(topic, ota_specific_topic) == 0 ||
+        strcmp(topic, "callbox/all/cmd/ota") == 0 ||
+        strstr(payload, "\"cmd\":\"ota_upgrade\"") != NULL ||
+        strstr(payload, "\"cmd\": \"ota_upgrade\"") != NULL) {
+        mqtt_handle_ota_command(payload);
+        return;
+    }
+
     char expected_topic[96];
     snprintf(expected_topic, sizeof(expected_topic), MQTT_CMD_TOPIC, s_config.callbox_id);
     if (strcmp(topic, expected_topic) != 0) {
@@ -187,10 +268,16 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
         char topic[96];
         snprintf(topic, sizeof(topic), MQTT_CMD_TOPIC, s_config.callbox_id);
         const int message_id = esp_mqtt_client_subscribe(event->client, topic, MQTT_QoS);
+
+        char ota_topic[96];
+        snprintf(ota_topic, sizeof(ota_topic), "callbox/%s/cmd/ota", s_config.callbox_id);
+        esp_mqtt_client_subscribe(event->client, ota_topic, MQTT_QoS);
+        esp_mqtt_client_subscribe(event->client, "callbox/all/cmd/ota", MQTT_QoS);
+
         const app_event_t app_event = { .type = APP_EVENT_MQTT_CONNECTED };
         (void)app_event_send(&app_event, 0);
-        ESP_LOGI(TAG, "Connected via %s; subscribe %s (id=%d)",
-                 mqtt_transport_name(s_config.transport), topic, message_id);
+        ESP_LOGI(TAG, "Connected via %s; subscribed %s, %s, callbox/all/cmd/ota (id=%d)",
+                 mqtt_transport_name(s_config.transport), topic, ota_topic, message_id);
         break;
     }
     case MQTT_EVENT_DISCONNECTED:
@@ -202,6 +289,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
     case MQTT_EVENT_SUBSCRIBED:
         ESP_LOGI(TAG, "Command subscription accepted (id=%d)", event->msg_id);
         break;
+
     case MQTT_EVENT_DATA: {
         /* Lệnh Callbox cố ý nhỏ. Không phân tích payload bị phân mảnh như
          * lệnh hoàn chỉnh; payload vượt kích thước bị bỏ qua. */

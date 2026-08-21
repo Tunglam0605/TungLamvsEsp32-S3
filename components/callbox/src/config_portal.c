@@ -68,6 +68,7 @@
 #include "callbox_mqtt.h"
 #include "callbox_config_store.h"
 #include "platform_wifi.h"
+#include "platform_ota.h"
 #include "status.h"
 #include "time_sync.h"
 #include "wifi_init.h"
@@ -1231,7 +1232,7 @@ static esp_err_t portal_page_handler_modern(httpd_req_t *req)
     snprintf(s_page_html, sizeof(s_page_html),
         "<!doctype html><html lang='vi'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Cai dat Callbox</title><style>"
         ":root{--bg:#0d1525;--surface:#172236;--surface2:#111a2c;--line:#3b4b64;--line2:#2d3b52;--text:#f8fafc;--muted:#a9b7ca;--green:#34d399;--green2:#047857;--cyan:#39cdf8;--red:#f87171;--shadow:0 16px 40px rgba(2,6,23,.22)}*{box-sizing:border-box}html{background:var(--bg)}body{margin:0;background:radial-gradient(circle at 78%% 8%%,#153352 0,transparent 35%%),var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,Segoe UI,Arial,sans-serif}main{width:min(1440px,calc(100%% - 48px));margin-inline:auto;padding:22px 0 38px}.hero,.card,.live{background:var(--surface);border:1px solid var(--line2);border-radius:12px;box-shadow:var(--shadow)}.hero{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:18px 20px}.brand{display:flex;align-items:center;gap:15px;min-width:0}.logo{width:min(178px,38vw);height:42px;object-fit:contain}.eyebrow{font-size:11px;letter-spacing:.15em;color:#92a8e8}.hero h1{margin:2px 0;font-size:26px;line-height:1.15}.hero p{margin:4px 0 0;color:var(--muted)}.device-label{color:var(--muted);font-size:12px}.device-label b{color:var(--green);font-weight:700}.header-status{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px}.pill{display:grid;grid-template-columns:auto 1fr;gap:2px 8px;align-items:center;min-height:50px;padding:8px 13px;border:1px solid var(--line);border-radius:11px;background:var(--surface2);white-space:nowrap}.pill i{grid-row:1/3;width:9px;height:9px;border-radius:50%%;background:#64748b}.pill.online i{background:var(--green);box-shadow:0 0 0 4px rgba(52,211,153,.12)}.pill.identity i{background:var(--cyan);box-shadow:0 0 0 4px rgba(57,205,248,.12)}.pill.off i{background:var(--red);box-shadow:0 0 0 4px rgba(248,113,113,.12)}.pill small{color:var(--muted);font-size:11px}.pill b{font-size:13px}.live{display:grid;grid-template-columns:repeat(auto-fit,minmax(142px,1fr));gap:0;margin-top:14px;padding:0}.live-item{min-width:0;padding:12px 14px;border-right:1px solid var(--line2)}.live-item:last-child{border-right:0}.live-item small{display:block;color:var(--muted);font-size:11px}.live-item b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px}.ok{color:var(--green)}.bad{color:var(--red)}.layout{display:grid;grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr);gap:14px;margin-top:14px}.card{padding:17px}.mqtt{grid-column:1/-1}.card h2{display:flex;align-items:center;gap:9px;margin:0 0 13px;font-size:17px}.step{display:grid;place-items:center;width:28px;height:28px;border:1px solid rgba(52,211,153,.6);border-radius:8px;background:rgba(52,211,153,.1);color:var(--green);font-size:12px}.field{margin:11px 0}.field label{display:block;margin-bottom:6px;color:var(--muted);font-size:13px;font-weight:650}.field input,.field select{width:100%%;min-height:46px;border:1px solid var(--line);border-radius:9px;padding:10px 12px;background:var(--surface2);color:var(--text);font:inherit}.field input::placeholder{color:#8190a6}.field input:hover,.field select:hover{border-color:#64748b}.field input:focus-visible,.field select:focus-visible,.btn:focus-visible{outline:3px solid rgba(57,205,248,.16);outline-offset:2px;border-color:var(--cyan)}.wifi-top{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:end}.wifi-bottom{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(180px,.9fr);gap:12px}.static-grid{display:grid;grid-template-columns:1fr 150px;gap:12px}.btn{min-height:46px;border:1px solid var(--line);border-radius:9px;padding:10px 15px;background:transparent;color:var(--text);font:650 14px inherit;cursor:pointer;transition:border-color .18s,background .18s,color .18s,transform .18s}.btn:hover:not(:disabled){border-color:var(--green);background:rgba(52,211,153,.08);color:var(--green)}.btn:active:not(:disabled){transform:translateY(1px)}.btn:disabled{opacity:.6;cursor:wait}.primary{min-height:50px;border-color:var(--green2);background:var(--green2);color:#ecfdf5}.primary:hover:not(:disabled){background:#065f46;color:#fff}.scan-note,.message{min-height:20px;margin:8px 0 0;color:var(--muted);font-size:13px}.message.ok{color:var(--green)}.message.err{color:var(--red)}.wifi-results,.profiles{display:grid;gap:7px;margin-top:10px}.wifi-row,.profile-row{display:flex;align-items:center;justify-content:space-between;gap:10px;min-height:44px;padding:7px 10px;border:1px solid var(--line2);border-radius:8px;background:rgba(17,26,44,.65)}.wifi-row button{min-width:0;flex:1;border:0;background:transparent;color:var(--text);font:650 13px inherit;text-align:left;cursor:pointer}.wifi-row button:hover{color:var(--cyan)}.wifi-rssi{color:var(--muted);font-size:12px;white-space:nowrap}.profile-row span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.profile-row small{color:var(--green);margin-left:6px}.delete{min-height:34px;padding:5px 10px;color:#fca5a5;border-color:rgba(248,113,113,.4)}.delete:hover:not(:disabled){color:#fecaca;border-color:var(--red);background:rgba(248,113,113,.08)}.topic-grid{display:grid;grid-template-columns:1.2fr repeat(3,1fr);gap:10px;margin-top:14px;padding-top:14px;border-top:1px solid var(--line2)}.topic-grid label{display:block;margin-bottom:6px;color:var(--muted);font-size:12px;font-weight:650}.readout{display:block;min-height:42px;overflow:auto;padding:10px;border:1px solid var(--line2);border-radius:8px;background:var(--surface2);color:#c7d2fe;font:12px ui-monospace,SFMono-Regular,Consolas,monospace;white-space:nowrap}.save-row{margin-top:14px}.save-row .btn{width:100%%}.help{margin:8px 0 0;color:var(--muted);font-size:12px}.hidden{display:none!important}@media(max-width:1023px){main{width:calc(100%% - 40px)}.layout{grid-template-columns:1fr}.mqtt{grid-column:auto}.hero{align-items:flex-start;flex-direction:column}.header-status{justify-content:flex-start}}@media(max-width:767px){main{width:calc(100%% - 24px);padding:14px 0 28px}.hero{padding:16px}.brand{align-items:flex-start}.logo{width:132px;height:35px}.hero h1{font-size:22px}.header-status{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));width:100%%}.pill{min-width:0;padding:8px 10px}.pill b{overflow:hidden;text-overflow:ellipsis}.live{grid-template-columns:repeat(2,minmax(0,1fr))}.live-item:nth-child(2n){border-right:0}.wifi-top,.wifi-bottom,.static-grid,.topic-grid{grid-template-columns:1fr}.wifi-top .btn{width:100%%}.card{padding:16px}}@media(prefers-reduced-motion:reduce){*{transition:none!important}}</style></head><body><main>"
-        "<header class='hero'><div class='brand'><img class='logo' src='/logo.jpg?v=5' alt='AUBOT'><div><div class='eyebrow'>AUBOT · CALLBOX</div><h1>C&#xE0;i &#x0111;&#x1EB7;t Callbox</h1><p>C&#x1EA5;u h&#xEC;nh thi&#x1EBF;t b&#x1ECB; cho v&#x1EAD;n h&#xE0;nh nh&#xE0; m&#xE1;y</p><div class='device-label'>T&#xEA;n thi&#x1EBF;t b&#x1ECB;: <b id='device-name'>%s</b></div></div></div><div class='header-status'><div class='pill online'><i></i><small>Tr&#x1EA1;ng th&#xE1;i</small><b id='head-sta'>&#x110;ang ki&#x1EC3;m tra</b></div><div class='pill identity'><i></i><small>Callbox ID</small><b id='head-id'>%s</b></div><div class='pill ap-pill'><i></i><small>AP c&#x1EA5;u h&#xEC;nh</small><b id='head-ap'>...</b></div></div></header>"
+        "<header class='hero'><div class='brand'><img class='logo' src='/logo.jpg?v=5' alt='AUBOT'><div><div class='eyebrow'>AUBOT · CALLBOX</div><h1>C&#xE0;i &#x0111;&#x1EB7;t Callbox</h1><p>C&#x1EA5;u h&#xEC;nh thi&#x1EBF;t b&#x1ECB; cho v&#x1EAD;n h&#xE0;nh nh&#xE0; m&#xE1;y</p><div class='device-label'>T&#xEA;n thi&#x1EBF;t b&#x1ECB;: <b id='device-name'>%s</b></div></div></div><div class='header-status'><div class='pill online'><i></i><small>Tr&#x1EA1;ng th&#xE1;i</small><b id='head-sta'>&#x110;ang ki&#x1EC3;m tra</b></div><div class='pill identity'><i></i><small>Callbox ID</small><b id='head-id'>%s</b></div><div class='pill ap-pill'><i></i><small>AP c&#x1EA5;u h&#xEC;nh</small><b id='head-ap'>...</b></div><a href='/ota' class='pill' style='text-decoration:none;color:inherit;cursor:pointer'><i style='background:#38bdf8'></i><small>N&#xE2;ng c&#x1EA5;p</small><b>&#x26A1; OTA</b></a></div></header>"
         "<section class='live' aria-live='polite'><div class='live-item'><small>STA / SSID</small><b id='sta-ssid'>&#x110;ang ki&#x1EC3;m tra...</b></div><div class='live-item'><small>&#x110;&#x1ECB;a ch&#x1EC9; IP</small><b id='sta-ip'>--</b></div><div class='live-item'><small>RSSI</small><b id='sta-rssi'>--</b></div><div class='live-item'><small>Gateway</small><b id='sta-gateway'>--</b></div><div class='live-item'><small>IP m&#x1EB7;c &#x0111;&#x1ECB;nh AP</small><b id='ap-default'>192.168.65.204</b></div><div class='live-item'><small>MQTT</small><b id='mqtt-state'>&#x110;ang ki&#x1EC3;m tra...</b></div></section>"
         "<form id='f'><div class='layout'><section class='card'><h2><span class='step'>01</span>Nh&#x1EAD;n d&#x1EA1;ng thi&#x1EBF;t b&#x1ECB;</h2><div class='field'><label for='callbox_id'>S&#x1ED1; ID Callbox</label><input id='callbox_id' name='callbox_id' value='%s' maxlength='15' inputmode='numeric' pattern='[0-9]*' autocomplete='off' required></div><p class='help'>T&#xEA;n MQTT/thi&#x1EBF;t b&#x1ECB; t&#x1EF1; sinh: AUBOT-Callbox-&lt;ID&gt;.</p></section>"
         "<section class='card'><h2><span class='step'>02</span>WiFi nh&#xE0; m&#xE1;y</h2><div class='wifi-top'><div class='field'><label for='ssid'>SSID m&#x1EA1;ng</label><input id='ssid' name='wifi_ssid' value='%s' maxlength='32' autocomplete='off'></div><div class='field wifi-scan-field'><span class='field-label-spacer' aria-hidden='true'>SSID m&#x1EA1;ng</span><button class='btn' type='button' id='scan'>Qu&#xE9;t m&#x1EA1;ng WiFi</button></div></div><p id='scanmsg' class='scan-note'></p><div id='wifi-results' class='wifi-results' aria-live='polite'></div><div class='wifi-bottom'><div class='field'><label for='wifi_pass'>M&#x1EAD;t kh&#x1EA9;u</label><input id='wifi_pass' type='password' name='wifi_pass' maxlength='63' autocomplete='new-password' placeholder='&#x110;&#x1EC3; tr&#x1ED1;ng &#x0111;&#x1EC3; gi&#x1EEF; m&#x1EAD;t kh&#x1EA9;u c&#x169;'></div><div class='field'><label for='wifi_dhcp'>Ch&#x1EBF; &#x0111;&#x1ED9; IP</label><select id='wifi_dhcp' name='wifi_dhcp'><option value='1' %s>T&#x1EF1; &#x0111;&#x1ED9;ng (DHCP)</option><option value='0' %s>Th&#x1EE7; c&#xF4;ng (IP t&#x0129;nh)</option></select></div></div><div id='static' class='%s'><div class='static-grid'><div class='field'><label for='wifi_ip'>&#x110;&#x1ECB;a ch&#x1EC9; IP</label><input id='wifi_ip' name='wifi_ip' value='%s' placeholder='192.168.1.20'></div><div class='field'><label for='wifi_netmask'>Netmask</label><input id='wifi_netmask' name='wifi_netmask' value='%s'></div></div><div class='static-grid'><div class='field'><label for='wifi_gateway'>Gateway</label><input id='wifi_gateway' name='wifi_gateway' value='%s'></div><div class='field'><label for='wifi_dns'>DNS</label><input id='wifi_dns' name='wifi_dns' value='%s'></div></div></div><div class='field'><label>M&#x1EA1;ng WiFi &#x0111;&#xE3; nh&#x1EDB;</label><div id='profiles' class='profiles'></div></div></section>"
@@ -1610,6 +1611,194 @@ static esp_err_t save_handler(httpd_req_t *req)
     return response_err;
 }
 
+static esp_err_t ota_status_handler(httpd_req_t *req)
+{
+    if (!require_portal_access(req)) {
+        return ESP_OK;
+    }
+    platform_ota_info_t info;
+    platform_ota_get_info(&info);
+
+    char json[256];
+    snprintf(json, sizeof(json),
+             "{\"state\":%d,\"progress\":%d,\"running\":\"%s\",\"next\":\"%s\",\"version\":\"%s\",\"error\":\"%s\"}",
+             info.state, info.progress_percent, info.running_partition, info.next_partition,
+             info.app_version, info.error_msg);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, json);
+    return ESP_OK;
+}
+
+static esp_err_t ota_upload_handler(httpd_req_t *req)
+{
+    if (!require_portal_access(req)) {
+        return ESP_OK;
+    }
+
+    const size_t total_len = req->content_len;
+    if (total_len == 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "File is empty");
+        return ESP_OK;
+    }
+
+    ESP_LOGI(TAG, "Web OTA upload started (content_len=%zu bytes)", total_len);
+
+    esp_err_t err = platform_ota_stream_begin(total_len);
+    if (err != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Cannot initialize OTA partition");
+        return ESP_OK;
+    }
+
+    char buf[1024];
+    size_t remaining = total_len;
+    while (remaining > 0) {
+        int received = httpd_req_recv(req, buf, (remaining < sizeof(buf)) ? remaining : sizeof(buf));
+        if (received <= 0) {
+            if (received == HTTPD_SOCK_ERR_TIMEOUT) {
+                continue;
+            }
+            ESP_LOGE(TAG, "Web OTA stream aborted by client");
+            platform_ota_stream_abort();
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Stream receive interrupted");
+            return ESP_FAIL;
+        }
+
+        err = platform_ota_stream_write(buf, received);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Web OTA write chunk failed: %s", esp_err_to_name(err));
+            platform_ota_stream_abort();
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid firmware image or flash write error");
+            return ESP_FAIL;
+        }
+        remaining -= received;
+    }
+
+    err = platform_ota_stream_finish();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Web OTA finalize validation failed: %s", esp_err_to_name(err));
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Firmware image checksum validation failed");
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "Web OTA update successful! Rebooting device...");
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"success\":true,\"message\":\"Firmware uploaded successfully! Rebooting in 2s...\"}");
+    return ESP_OK;
+}
+
+static esp_err_t ota_page_handler(httpd_req_t *req)
+{
+    if (!request_is_authorized(req)) {
+        return send_login_page(req, NULL);
+    }
+
+    platform_ota_info_t info;
+    platform_ota_get_info(&info);
+
+    httpd_resp_set_type(req, "text/html; charset=utf-8");
+    httpd_resp_send_chunk(req,
+        "<!DOCTYPE html><html lang='vi'><head><meta charset='UTF-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1.0'>"
+        "<title>AUBOT Callbox - Nâng Cấp Firmware OTA</title>"
+        "<style>"
+        ":root{--bg:#0f172a;--card:#1e293b;--accent:#38bdf8;--accent-hover:#0284c7;--text:#f8fafc;--muted:#94a3b8;--border:#334155;--success:#22c55e;--danger:#ef4444;}"
+        "*{box-sizing:border-box;margin:0;padding:0;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;}"
+        "body{background:var(--bg);color:var(--text);display:flex;justify-content:center;padding:24px 16px;min-height:100vh;}"
+        ".container{width:100%;max-width:540px;display:flex;flex-direction:column;gap:20px;}"
+        ".header{display:flex;align-items:center;justify-content:space-between;padding-bottom:12px;border-bottom:1px solid var(--border);}"
+        ".header h1{font-size:1.25rem;font-weight:700;color:var(--accent);display:flex;align-items:center;gap:8px;}"
+        ".btn-back{background:transparent;border:1px solid var(--border);color:var(--muted);padding:6px 12px;border-radius:6px;text-decoration:none;font-size:0.875rem;transition:all .2s;}"
+        ".btn-back:hover{border-color:var(--accent);color:var(--accent);}"
+        ".card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:20px;box-shadow:0 4px 6px -1px rgba(0,0,0,0.3);}"
+        ".card h2{font-size:1rem;margin-bottom:14px;color:var(--text);display:flex;align-items:center;gap:6px;}"
+        ".info-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;font-size:0.875rem;}"
+        ".info-item{background:#0f172a80;padding:10px;border-radius:8px;border:1px solid var(--border);}"
+        ".info-label{color:var(--muted);font-size:0.75rem;margin-bottom:4px;}"
+        ".info-val{font-weight:600;color:var(--accent);font-family:monospace;}"
+        ".dropzone{border:2px dashed var(--border);border-radius:10px;padding:32px 16px;text-align:center;cursor:pointer;transition:all .2s;background:#0f172a40;}"
+        ".dropzone:hover,.dropzone.dragover{border-color:var(--accent);background:#38bdf810;}"
+        ".dropzone-icon{font-size:2rem;margin-bottom:8px;}"
+        ".file-info{margin-top:12px;font-size:0.875rem;color:var(--accent);font-weight:600;display:none;}"
+        ".btn-upload{width:100%;background:var(--accent);color:#0f172a;border:none;padding:12px;border-radius:8px;font-weight:700;font-size:1rem;margin-top:16px;cursor:pointer;transition:all .2s;display:flex;align-items:center;justify-content:center;gap:8px;}"
+        ".btn-upload:hover{background:var(--accent-hover);}"
+        ".btn-upload:disabled{opacity:0.5;cursor:not-allowed;}"
+        ".progress-wrap{margin-top:16px;display:none;}"
+        ".progress-bar-bg{background:#0f172a;border-radius:999px;height:12px;overflow:hidden;border:1px solid var(--border);}"
+        ".progress-bar-fill{background:linear-gradient(90deg,var(--accent),#818cf8);height:100%;width:0%;transition:width .15s ease;}"
+        ".progress-status{display:flex;justify-content:space-between;font-size:0.8rem;color:var(--muted);margin-top:6px;}"
+        ".alert{padding:12px;border-radius:8px;font-size:0.875rem;margin-top:16px;display:none;}"
+        ".alert-success{background:#14532d80;border:1px solid var(--success);color:#86efac;}"
+        ".alert-danger{background:#7f1d1d80;border:1px solid var(--danger);color:#fca5a5;}"
+        "</style></head><body>"
+        "<div class='container'>"
+        "<div class='header'><h1>⚡ Nâng Cấp Firmware (OTA)</h1><a href='/' class='btn-back'>← Trang Cấu Hình</a></div>"
+        "<div class='card'><h2>📦 Thông Tin Thiết Bị</h2><div class='info-grid'>",
+        HTTPD_RESP_USE_STRLEN);
+
+    char info_buf[1024];
+    snprintf(info_buf, sizeof(info_buf),
+        "<div class='info-item'><div class='info-label'>Slot Đang Chạy</div><div class='info-val'>%s</div></div>"
+        "<div class='info-item'><div class='info-label'>Slot Mục Tiêu Nạp</div><div class='info-val'>%s</div></div>"
+        "<div class='info-item'><div class='info-label'>Phiên Bản App</div><div class='info-val'>%s</div></div>"
+        "<div class='info-item'><div class='info-label'>Ngày Biên Dịch</div><div class='info-val'>%s</div></div>",
+        info.running_partition, info.next_partition,
+        info.app_version, info.compile_time);
+    httpd_resp_send_chunk(req, info_buf, HTTPD_RESP_USE_STRLEN);
+
+    httpd_resp_send_chunk(req,
+        "</div></div>"
+        "<div class='card'><h2>📤 Tải Lên Bản Firmware (.bin)</h2>"
+        "<div class='dropzone' id='dropzone' onclick=\"document.getElementById('fileInput').click()\">"
+        "<div class='dropzone-icon'>📁</div>"
+        "<p>Kéo thả file <b>.bin</b> vào đây hoặc bấm để chọn</p>"
+        "<input type='file' id='fileInput' accept='.bin' style='display:none' onchange='handleFileSelect(this.files)'>"
+        "<div class='file-info' id='fileInfo'></div></div>"
+        "<button class='btn-upload' id='uploadBtn' disabled onclick='startUpload()'>🚀 Bắt Đầu Nạp Firmware</button>"
+        "<div class='progress-wrap' id='progressWrap'>"
+        "<div class='progress-bar-bg'><div class='progress-bar-fill' id='progressFill'></div></div>"
+        "<div class='progress-status'><span id='statusText'>Đang nạp...</span><span id='percentText'>0%</span></div>"
+        "</div>"
+        "<div class='alert' id='alertBox'></div>"
+        "</div></div>"
+        "<script>"
+        "let selectedFile=null;"
+        "function handleFileSelect(files){if(!files||!files[0])return;selectedFile=files[0];"
+        "document.getElementById('fileInfo').style.display='block';"
+        "document.getElementById('fileInfo').innerText=`File: ${selectedFile.name} (${(selectedFile.size/1024).toFixed(1)} KB)`;"
+        "document.getElementById('uploadBtn').disabled=false;}"
+        "const dz=document.getElementById('dropzone');"
+        "['dragenter','dragover'].forEach(e=>dz.addEventListener(e,ev=>{ev.preventDefault();dz.classList.add('dragover');},false));"
+        "['dragleave','drop'].forEach(e=>dz.addEventListener(e,ev=>{ev.preventDefault();dz.classList.remove('dragover');},false));"
+        "dz.addEventListener('drop',ev=>{const dt=ev.dataTransfer;if(dt&&dt.files.length)handleFileSelect(dt.files);});"
+        "function startUpload(){if(!selectedFile)return;"
+        "document.getElementById('uploadBtn').disabled=true;"
+        "document.getElementById('progressWrap').style.display='block';"
+        "const alertBox=document.getElementById('alertBox');alertBox.style.display='none';"
+        "const xhr=new XMLHttpRequest();"
+        "xhr.open('POST','/api/ota/upload',true);"
+        "xhr.upload.onprogress=function(e){if(e.lengthComputable){const p=Math.round((e.loaded/e.total)*100);"
+        "document.getElementById('progressFill').style.width=p+'%';"
+        "document.getElementById('percentText').innerText=p+'%';"
+        "document.getElementById('statusText').innerText=`Đang truyền (${(e.loaded/1024).toFixed(0)}/${(e.total/1024).toFixed(0)} KB)...`;}};"
+        "xhr.onload=function(){if(xhr.status===200){"
+        "document.getElementById('statusText').innerText='Xác thực & Nạp thành công!';"
+        "alertBox.className='alert alert-success';alertBox.style.display='block';"
+        "alertBox.innerHTML='🎉 <b>Nạp firmware thành công 100%!</b> Thiết bị đang khởi động lại vào slot mới trong giây lát...';"
+        "setTimeout(()=>{window.location.href='/';},5000);"
+        "}else{"
+        "document.getElementById('uploadBtn').disabled=false;"
+        "alertBox.className='alert alert-danger';alertBox.style.display='block';"
+        "alertBox.innerText='❌ Lỗi nạp firmware: '+(xhr.responseText||'Không thể ghi flash');}};"
+        "xhr.onerror=function(){document.getElementById('uploadBtn').disabled=false;alertBox.className='alert alert-danger';alertBox.style.display='block';alertBox.innerText='❌ Lỗi kết nối mạng khi tải lên!';};"
+        "xhr.send(selectedFile);}"
+        "</script></body></html>",
+        HTTPD_RESP_USE_STRLEN);
+
+    return httpd_resp_send_chunk(req, NULL, 0);
+}
+
+
+
 /* Khởi động HTTP server portal (nếu chưa chạy) và đăng ký toàn bộ route.
  * Gọi một lần khi AP cấu hình sẵn sàng (callback từ wifi_init). */
 esp_err_t config_portal_start(Config_t *config)
@@ -1620,12 +1809,12 @@ esp_err_t config_portal_start(Config_t *config)
     /* Idempotent: nếu server đã chạy thì không khởi động lại */
     if (s_server) return ESP_OK;
 
-    /* Cấu hình server: tăng max_uri_handlers cho đủ 13 route + stack an toàn */
+    /* Cấu hình server: tăng max_uri_handlers cho đủ các route + stack an toàn */
     httpd_config_t server_config = HTTPD_DEFAULT_CONFIG();
-    server_config.max_uri_handlers = 15;
-    server_config.stack_size = 8192;
-    server_config.recv_wait_timeout = 2;
-    server_config.send_wait_timeout = 2;
+    server_config.max_uri_handlers = 20;
+    server_config.stack_size = 10240;
+    server_config.recv_wait_timeout = 5;
+    server_config.send_wait_timeout = 5;
 
     esp_err_t err = httpd_start(&s_server, &server_config);
     if (err != ESP_OK) {
@@ -1708,7 +1897,21 @@ esp_err_t config_portal_start(Config_t *config)
         .uri = "/api/session/finish", .method = HTTP_POST,
         .handler = session_finish_handler, .user_ctx = NULL,
     };
-    /* Đăng ký toàn bộ handler vào server — chỉ đăng ký, không cần giữ handle */
+    /* Đăng ký route OTA Web UI và API */
+    const httpd_uri_t ota_page_uri = {
+        .uri = "/ota", .method = HTTP_GET,
+        .handler = ota_page_handler, .user_ctx = NULL,
+    };
+    const httpd_uri_t ota_upload_uri = {
+        .uri = "/api/ota/upload", .method = HTTP_POST,
+        .handler = ota_upload_handler, .user_ctx = NULL,
+    };
+    const httpd_uri_t ota_status_uri = {
+        .uri = "/api/ota/status", .method = HTTP_GET,
+        .handler = ota_status_handler, .user_ctx = NULL,
+    };
+
+    /* Đăng ký toàn bộ handler vào server */
     httpd_register_uri_handler(s_server, &root_uri);
     httpd_register_uri_handler(s_server, &login_uri);
     httpd_register_uri_handler(s_server, &logo_uri);
@@ -1722,7 +1925,11 @@ esp_err_t config_portal_start(Config_t *config)
     httpd_register_uri_handler(s_server, &session_open_uri);
     httpd_register_uri_handler(s_server, &session_ping_uri);
     httpd_register_uri_handler(s_server, &session_finish_uri);
+    httpd_register_uri_handler(s_server, &ota_page_uri);
+    httpd_register_uri_handler(s_server, &ota_upload_uri);
+    httpd_register_uri_handler(s_server, &ota_status_uri);
 
-    ESP_LOGI(TAG, "Configuration portal ready at http://%s/", CALLBOX_AP_IP_ADDR);
+    ESP_LOGI(TAG, "Configuration portal ready at http://%s/ (OTA at /ota)", CALLBOX_AP_IP_ADDR);
     return ESP_OK;
 }
+
