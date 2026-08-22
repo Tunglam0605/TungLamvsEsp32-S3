@@ -2,11 +2,13 @@
 #include "state_machine.h"
 #include "app_event_queue.h"
 #include "button_gate.h"
+#include "cancel_hold_gesture.h"
 #include "callbox_mqtt.h"
 #include "io_handler.h"
 #include "health_monitor.h"
 #include "output_renderer.h"
 #include "ota_output_adapter.h"
+#include "ota_https_source.h"
 #include "network_link.h"
 #include "sequence_service.h"
 #include "status.h"
@@ -22,11 +24,7 @@ static const char *TAG = "MISSION";
 static char s_agv_id[2][32];
 static uint32_t s_sync_sequence;
 static mission_transaction_t s_sync_transaction;
-static bool s_cancel_hold_active;
-static bool s_cancel_hold_consumed;
-static uint32_t s_cancel_hold_started_ms;
-
-#define CANCEL_RESCUE_HOLD_MS 5000U
+static cancel_hold_gesture_t s_cancel_hold_gesture;
 #define SYNC_RETRY_INITIAL_MS 5000U
 #define SYNC_RETRY_MAX_MS     300000U
 #define SYNC_RETRY_QUEUE_BUSY_MS 1000U
@@ -567,13 +565,46 @@ void state_machine_init(void)
     status_init();
     button_gate_reset();
     status_set_comm_state(COMM_OFFLINE);
-    s_cancel_hold_active = false;
-    s_cancel_hold_consumed = false;
+    cancel_hold_gesture_reset(&s_cancel_hold_gesture);
     s_sync_retry_interval_ms = SYNC_RETRY_INITIAL_MS;
     s_sync_waiting_for_reconnect = false;
     s_reconcile_after_transaction_timeout = false;
     s_active_session_epoch = 0U;
     ESP_LOGI(TAG, "Mission Manager initialized (single business-state owner)");
+}
+
+static void apply_cancel_hold_actions(uint32_t actions, uint32_t cancel_timestamp)
+{
+    if (actions & CANCEL_HOLD_ACTION_CANCEL) {
+        request_cancel(cancel_timestamp);
+    }
+    if (actions & CANCEL_HOLD_ACTION_RESCUE_AP) {
+        bool rescue_enabled = false;
+        const esp_err_t err = wifi_toggle_rescue_ap(&rescue_enabled);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Rescue AP toggle failed: %s", esp_err_to_name(err));
+        } else {
+            ESP_LOGW(TAG, "Rescue AP %s by 5-second Cancel hold",
+                     rescue_enabled ? "enabled" : "disabled");
+        }
+    }
+    if (actions & (CANCEL_HOLD_ACTION_WARNING_6S | CANCEL_HOLD_ACTION_WARNING_7S |
+                   CANCEL_HOLD_ACTION_WARNING_8S | CANCEL_HOLD_ACTION_WARNING_9S |
+                   CANCEL_HOLD_ACTION_WARNING_10S)) {
+        status_request_feedback(OUTPUT_FEEDBACK_CANCEL_HOLD_WARNING);
+    }
+    if (actions & CANCEL_HOLD_ACTION_OTA_REQUEST) {
+        const esp_err_t err = ota_https_source_request_configured();
+        if (err == ESP_OK) {
+            ESP_LOGI(TAG, "Configured HTTPS OTA requested by 10-second Cancel hold");
+        } else if (err == ESP_ERR_NOT_SUPPORTED) {
+            ESP_LOGW(TAG, "10-second Cancel hold ignored: HTTPS OTA feature disabled");
+        } else if (err == ESP_ERR_INVALID_ARG) {
+            ESP_LOGW(TAG, "10-second Cancel hold ignored: HTTPS OTA URL is not configured securely");
+        } else {
+            ESP_LOGW(TAG, "Configured HTTPS OTA request rejected: %s", esp_err_to_name(err));
+        }
+    }
 }
 
 static void handle_button_event(const ButtonMsg_t *button)
@@ -587,39 +618,25 @@ static void handle_button_event(const ButtonMsg_t *button)
         return;
     }
 
-    /* Nhấn Cancel ngắn chỉ được cam kết sau khi nhả nút. Điều này ngăn việc
-     * giữ nút 5 giây để kích hoạt Rescue AP vô tình cũng gửi lệnh cancel. */
+    /* Short Cancel is committed only on release. Long-hold milestones are
+     * one-shot and release flushes any threshold crossed since the last tick. */
     if (button->state == BTN_PRESSED && accepted_press) {
-        s_cancel_hold_active = true;
-        s_cancel_hold_consumed = false;
-        s_cancel_hold_started_ms = mission_now_ms();
-    } else if (button->state == BTN_RELEASED && s_cancel_hold_active) {
-        if (!s_cancel_hold_consumed) request_cancel(button->timestamp);
-        s_cancel_hold_active = false;
+        cancel_hold_gesture_press(&s_cancel_hold_gesture, mission_now_ms());
+    } else if (button->state == BTN_RELEASED) {
+        const uint32_t actions = cancel_hold_gesture_release(&s_cancel_hold_gesture,
+                                                              mission_now_ms());
+        apply_cancel_hold_actions(actions, button->timestamp);
     }
 }
 
-static void tick_cancel_rescue_hold(void)
+static void tick_cancel_hold_gesture(void)
 {
     callbox_status_t snapshot;
     status_get_snapshot(&snapshot);
-    if (!s_cancel_hold_active || s_cancel_hold_consumed || !snapshot.Button[2].level ||
-        !time_reached(mission_now_ms(), s_cancel_hold_started_ms + CANCEL_RESCUE_HOLD_MS)) {
-        return;
-    }
-
-    bool rescue_enabled = false;
-    const esp_err_t err = wifi_toggle_rescue_ap(&rescue_enabled);
-    s_cancel_hold_consumed = true;
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Rescue AP toggle failed: %s", esp_err_to_name(err));
-        return;
-    }
-    ESP_LOGW(TAG, "Rescue AP %s by 5-second Cancel hold",
-             rescue_enabled ? "enabled" : "disabled");
-    /* Phản hồi network (GPIO46) do composition root đăng ký qua callback
-     * wifi_set_rescue_ap_changed_callback — Mission không gọi network_status
-     * trực tiếp. */
+    const uint32_t actions = cancel_hold_gesture_tick(&s_cancel_hold_gesture,
+                                                      mission_now_ms(),
+                                                      snapshot.Button[2].level);
+    apply_cancel_hold_actions(actions, 0U);
 }
 
 void state_machine_task(void *arg)
@@ -683,7 +700,7 @@ void state_machine_task(void *arg)
             begin_wcs_sync();
         }
         tick_sync();
-        tick_cancel_rescue_hold();
+        tick_cancel_hold_gesture();
         publish_output_snapshot();
         health_monitor_check_in(HEALTH_TASK_STATE_MACHINE);
         vTaskDelay(pdMS_TO_TICKS(20));

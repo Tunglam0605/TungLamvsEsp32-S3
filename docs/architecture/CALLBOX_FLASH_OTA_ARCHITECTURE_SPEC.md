@@ -1324,6 +1324,33 @@ no accidental CANCEL
 server OTA trigger
 ```
 
+#### Phase 8 behavior and invariants
+
+`cancel_hold_gesture` is a pure, monotonic-time recognizer. Mission Manager
+owns its side effects; the recognizer has no GPIO, FreeRTOS, OTA service, or
+network dependency.
+
+```text
+press Cancel
+  release before 5 s -> normal CANCEL intent
+  5 s                -> toggle Rescue AP, once
+  6, 7, 8, 9 s       -> one warning feedback event each
+  10 s               -> one warning feedback event + one HTTPS OTA request
+  release at/after 5 s -> never normal CANCEL
+```
+
+Milestones require a continuously held button and reset on release/repress.
+Each milestone, including the 10-second request, is emitted at most once per
+hold; a failed request is not retried until a new gesture. The 10-second
+trigger calls only `ota_https_source_request_configured()`, which remains
+asynchronous and retains the Phase 7 `ota_policy` admission check. It neither
+calls direct `esp_ota_*` APIs nor installs/reboots automatically.
+
+Warning feedback flows through `status_request_feedback()` to Output Renderer;
+Mission/trigger code never owns buzzer or GPIO hardware. Disabled HTTPS OTA or
+an absent/insecure manifest URL is safely declined and logged, while the hold
+remains consumed.
+
 ---
 
 ## 23. Testing Matrix

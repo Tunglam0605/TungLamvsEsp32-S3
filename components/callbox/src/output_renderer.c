@@ -150,6 +150,9 @@ static void apply_feedback(const app_output_snapshot_t *snapshot, uint32_t *last
     case OUTPUT_FEEDBACK_OTA_FAILED:
         buzzer_beep(3, 250);
         break;
+    case OUTPUT_FEEDBACK_CANCEL_HOLD_WARNING:
+        buzzer_beep(1, 100);
+        break;
     default:
         break;
     }
