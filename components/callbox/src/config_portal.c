@@ -46,6 +46,8 @@
  * @see     io_debug.c — trạng thái I/O cho /api/io-status
  */
 #include "config_portal.h"
+#include "config_portal_private.h"
+#include "ota_web_handler.h"
 #include "sdkconfig.h"
 #include <ctype.h>
 #include <stdbool.h>
@@ -128,6 +130,9 @@ static esp_err_t portal_receive_body(httpd_req_t *req, char *body, size_t body_s
 
 /* Hạn phiên cấu hình (ms): nếu không tương tác quá lâu thì AP được phép tắt */
 static volatile TickType_t s_session_deadline;
+/* An OTA upload must keep the AP/session alive even if the browser cannot
+ * issue its normal heartbeat while its request body is streaming. */
+static volatile bool s_ota_active;
 #define PORTAL_SESSION_TIMEOUT_MS 30000
 /* Hạn cookie đăng nhập STA: 30 phút kể từ khi đăng nhập */
 #define PORTAL_AUTH_TIMEOUT_MS (30U * 60U * 1000U)
@@ -566,7 +571,7 @@ static bool request_has_sta_login(httpd_req_t *req)
 }
 
 /* Mọi đường vào portal, gồm cả AP cứu hộ và STA, đều cần cookie hợp lệ. */
-static bool request_is_authorized(httpd_req_t *req)
+bool config_portal_request_is_authorized(httpd_req_t *req)
 {
     return request_has_sta_login(req);
 }
@@ -575,7 +580,7 @@ static bool request_is_authorized(httpd_req_t *req)
  * 401 tức thì (các endpoint API bắt đầu bằng lời gọi này). */
 static bool require_portal_access(httpd_req_t *req)
 {
-    if (request_is_authorized(req)) return true;
+    if (config_portal_request_is_authorized(req)) return true;
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Login required");
     return false;
@@ -999,9 +1004,15 @@ static esp_err_t session_finish_handler(httpd_req_t *req)
 /* Query trạng thái phiên: còn hoạt động nếu hạn chưa trôi và khác 0 */
 bool config_portal_session_active(void)
 {
+    if (s_ota_active) return true;
     TickType_t deadline = s_session_deadline;
     if (deadline == 0) return false;
     return (int32_t)(deadline - xTaskGetTickCount()) > 0;
+}
+
+void config_portal_set_ota_activity(bool active)
+{
+    s_ota_active = active;
 }
 
 /* Legacy portal renderers retained temporarily for source history only. The
@@ -1284,6 +1295,8 @@ static esp_err_t portal_page_handler_modern(httpd_req_t *req)
         "<style>.layout>.card:first-child>.portal-password-field{display:block;min-height:0;margin:14px 0 0;padding:0;border:0;background:transparent;box-shadow:none}.layout>.card:first-child>.portal-password-field label{display:block;margin:0 0 6px}.layout>.card:first-child>.portal-password-field input{width:100%;min-height:44px;padding:9px 12px;border:1px solid var(--line2);border-radius:8px;background:var(--surface2);color:var(--text);text-align:left}.layout>.card:first-child>.portal-password-field:focus-within{border:0;box-shadow:none}.layout>.card:first-child>.portal-password-field input:focus-visible{outline:3px solid rgba(52,211,153,.18);border-color:var(--green)}</style>";
     static const char portal_security_script[] =
         "<script>(function(){const card=document.querySelector('.layout>.card:first-child');if(!card)return;const field=document.createElement('div');field.className='field portal-password-field';field.innerHTML=\"<label for='web_password'>M&#x1EAD;t kh&#x1EA9;u portal m&#x1EDB;i</label><input id='web_password' name='web_password' type='password' minlength='12' maxlength='63' autocomplete='new-password' placeholder='&#x110;&#x1EC3; tr&#x1ED1;ng &#x0111;&#x1EC3; gi&#x1EEF; nguy&#xEA;n' title='T&#x1ED1;i thi&#x1EC3;u 12 k&#xFD; t&#x1EF1;, g&#x1ED3;m ch&#x1EEF; hoa, ch&#x1EEF; th&#x1B0;&#x1EDD;ng, s&#x1ED1; v&#xE0; k&#xFD; t&#x1EF1; &#x111;&#x1EB7;c bi&#x1EC7;t'>\";const status=card.querySelector('.identity-status');card.insertBefore(field,status||null)})();</script>";
+    static const char ota_link_script[] =
+        "<script>(function(){const form=document.getElementById('f');if(!form)return;const link=document.createElement('a');link.href='/ota';link.className='btn secondary';link.textContent='Firmware OTA';link.style.display='inline-flex';link.style.alignItems='center';link.style.justifyContent='center';link.style.marginTop='12px';form.append(link)})();</script>";
     (void)page_insert_before("</head>", identity_style);
     (void)page_insert_before("</head>", alignment_style);
     (void)page_insert_before("</head>", vertical_layout_style);
@@ -1296,6 +1309,7 @@ static esp_err_t portal_page_handler_modern(httpd_req_t *req)
     (void)page_insert_before("</body>", ethernet_status_script);
     (void)page_insert_before("</body>", scan_collapse_script);
     (void)page_insert_before("</body>", portal_security_script);
+    (void)page_insert_before("</body>", ota_link_script);
 
     /* Add the transport choice without disturbing the stable, compact MQTT
      * field grid. The select remains a normal form element and is saved by
@@ -1338,7 +1352,7 @@ static esp_err_t portal_page_handler_modern(httpd_req_t *req)
  * được mở phiên cấu hình và nhận giao diện hiện đại. */
 static esp_err_t root_handler(httpd_req_t *req)
 {
-    if (!request_is_authorized(req)) return send_login_page(req, NULL);
+    if (!config_portal_request_is_authorized(req)) return send_login_page(req, NULL);
     if (request_from_local_ap(req)) {
         s_session_deadline = xTaskGetTickCount() + pdMS_TO_TICKS(PORTAL_SESSION_TIMEOUT_MS);
     }
@@ -1644,7 +1658,9 @@ esp_err_t config_portal_start(Config_t *config)
 
     /* Cấu hình server: tăng max_uri_handlers cho đủ 13 route + stack an toàn */
     httpd_config_t server_config = HTTPD_DEFAULT_CONFIG();
-    server_config.max_uri_handlers = 15;
+    /* 13 portal routes plus five authenticated OTA routes, with two spare
+     * slots for portal maintenance endpoints. */
+    server_config.max_uri_handlers = 20;
     server_config.stack_size = 8192;
     server_config.recv_wait_timeout = 2;
     server_config.send_wait_timeout = 2;
@@ -1742,19 +1758,29 @@ esp_err_t config_portal_start(Config_t *config)
         .handler = session_finish_handler, .user_ctx = NULL,
     };
     /* Đăng ký toàn bộ handler vào server — chỉ đăng ký, không cần giữ handle */
-    httpd_register_uri_handler(s_server, &root_uri);
-    httpd_register_uri_handler(s_server, &login_uri);
-    httpd_register_uri_handler(s_server, &logo_uri);
-    httpd_register_uri_handler(s_server, &save_uri);
-    httpd_register_uri_handler(s_server, &scan_uri);
-    httpd_register_uri_handler(s_server, &config_uri);
-    httpd_register_uri_handler(s_server, &io_status_uri);
-    httpd_register_uri_handler(s_server, &system_status_uri);
-    httpd_register_uri_handler(s_server, &wifi_profiles_uri);
-    httpd_register_uri_handler(s_server, &wifi_profile_delete_uri);
-    httpd_register_uri_handler(s_server, &session_open_uri);
-    httpd_register_uri_handler(s_server, &session_ping_uri);
-    httpd_register_uri_handler(s_server, &session_finish_uri);
+    const httpd_uri_t *const portal_routes[] = {
+        &root_uri, &login_uri, &logo_uri, &save_uri, &scan_uri, &config_uri,
+        &io_status_uri, &system_status_uri, &wifi_profiles_uri,
+        &wifi_profile_delete_uri, &session_open_uri, &session_ping_uri,
+        &session_finish_uri,
+    };
+    for (size_t i = 0; i < sizeof(portal_routes) / sizeof(portal_routes[0]); ++i) {
+        err = httpd_register_uri_handler(s_server, portal_routes[i]);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to register portal route %s: %s", portal_routes[i]->uri,
+                     esp_err_to_name(err));
+            httpd_stop(s_server);
+            s_server = NULL;
+            return err;
+        }
+    }
+    err = ota_web_handler_register(s_server);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register OTA WebUI routes: %s", esp_err_to_name(err));
+        httpd_stop(s_server);
+        s_server = NULL;
+        return err;
+    }
 
     ESP_LOGI(TAG, "Configuration portal ready at http://%s/", CALLBOX_AP_IP_ADDR);
     return ESP_OK;
