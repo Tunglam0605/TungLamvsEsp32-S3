@@ -72,6 +72,9 @@
 #include "time_sync.h"
 #include "boot_validation.h"
 #include "ota_boot_validator.h"
+#include "ota_policy.h"
+#include "ota_output_adapter.h"
+#include "ota_service.h"
 
 static const char *TAG = "MAIN";
 static volatile esp_err_t s_portal_start_result = ESP_ERR_INVALID_STATE;
@@ -293,6 +296,7 @@ static void run_recovery_portal(void)
     build_configuration_ap_identity(g_config.callbox_id, ap_ssid, sizeof(ap_ssid),
                                     ap_password, sizeof(ap_password));
     s_portal_start_result = ESP_ERR_INVALID_STATE;
+    ota_policy_set_mode(OTA_POLICY_MODE_RECOVERY);
     config_portal_set_recovery_mode(true);
     wifi_set_config_ap_callback(start_config_portal_when_ap_is_ready);
     ret = wifi_init_recovery_ap(ap_ssid, ap_password);
@@ -321,6 +325,12 @@ void callbox_app_run(void)
          * a pending image still lets the bootloader select the prior image. */
         ESP_LOGE(TAG, "Cannot inspect OTA boot state: %s", esp_err_to_name(boot_validation_err));
     }
+
+    esp_err_t ota_runtime_err = ota_service_init();
+    if (ota_runtime_err != ESP_OK) boot_fail_restart("ota_service", ota_runtime_err, false);
+    ota_runtime_err = ota_output_adapter_init();
+    if (ota_runtime_err != ESP_OK) boot_fail_restart("ota_output_adapter", ota_runtime_err, false);
+    ota_policy_set_mode(OTA_POLICY_MODE_NORMAL);
 
     health_monitor_boot_begin();
     if (health_monitor_recovery_requested()) run_recovery_portal();

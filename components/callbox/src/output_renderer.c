@@ -141,6 +141,15 @@ static void apply_feedback(const app_output_snapshot_t *snapshot, uint32_t *last
     case OUTPUT_FEEDBACK_TRANSACTION_FAILED:
         buzzer_beep(1, 650);
         break;
+    case OUTPUT_FEEDBACK_OTA_STAGED:
+        buzzer_beep(2, 100);
+        break;
+    case OUTPUT_FEEDBACK_OTA_INSTALLING:
+        buzzer_beep(3, 100);
+        break;
+    case OUTPUT_FEEDBACK_OTA_FAILED:
+        buzzer_beep(3, 250);
+        break;
     default:
         break;
     }
@@ -229,15 +238,21 @@ static void render_snapshot(const app_output_snapshot_t *snapshot)
         snapshot->mission[0] == TASK_LOCKED || snapshot->mission[1] == TASK_QUEUED ||
         snapshot->mission[1] == TASK_ASSIGNED || snapshot->mission[1] == TASK_LOCKED;
     const transport_alert_t transport_alert = transport_alert_from_snapshot(snapshot);
-    apply_transport_buzzer(transport_alert, now_ms);
+    if (!snapshot->ota_active) apply_transport_buzzer(transport_alert, now_ms);
     /* Transport faults have priority over Mission output: red fast means no
      * uplink, red slow means broker unreachable, red double means WCS sync. */
-    const int tower_color = transport_alert == TRANSPORT_ALERT_READY ?
+    /* OTA presentation is a product adapter concern. While the generic OTA
+     * service is actively receiving/verifying/installing, it outranks network
+     * and mission diagnostics without giving OTA code ownership of GPIO. */
+    const int ota_cycle_color = (int)((now_ms / 250U) % 3U) + 1;
+    const int tower_color = snapshot->ota_active ? ota_cycle_color :
+                            transport_alert == TRANSPORT_ALERT_READY ?
                             confirmed_mission_active ? 2 :
                             snapshot->tower_warning == TOWER_WARNING_ERROR ? 1 :
                             snapshot->tower_warning == TOWER_WARNING_OVERDUE ? 2 :
                             mission_active ? 2 : 3 : 1;
-    const LEDState_t tower_state = transport_alert == TRANSPORT_ALERT_NO_UPLINK ?
+    const LEDState_t tower_state = snapshot->ota_active ? LED_ON :
+                                   transport_alert == TRANSPORT_ALERT_NO_UPLINK ?
                                        LED_BLINK_FAST :
                                    transport_alert == TRANSPORT_ALERT_MQTT_OFFLINE ?
                                        LED_BLINK_SLOW :

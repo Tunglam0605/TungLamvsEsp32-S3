@@ -6,6 +6,7 @@
 #include "io_handler.h"
 #include "health_monitor.h"
 #include "output_renderer.h"
+#include "ota_output_adapter.h"
 #include "network_link.h"
 #include "sequence_service.h"
 #include "status.h"
@@ -467,7 +468,9 @@ static void tick_sync(void)
 static void publish_output_snapshot(void)
 {
     callbox_status_t status_snapshot;
+    ota_output_snapshot_t ota_snapshot;
     status_get_snapshot(&status_snapshot);
+    ota_output_adapter_get_snapshot(&ota_snapshot);
     const app_output_snapshot_t snapshot = {
         .mission = { status_snapshot.Mission[0], status_snapshot.Mission[1] },
         .call_pending = { status_snapshot.Call[0].pending,
@@ -482,6 +485,7 @@ static void publish_output_snapshot(void)
         .cancel_ack_until_ms = status_snapshot.CancelAckUntilMs,
         .feedback = status_snapshot.Feedback,
         .feedback_generation = status_snapshot.FeedbackGeneration,
+        .ota_active = ota_snapshot.tower_override_active,
     };
     output_renderer_publish(&snapshot);
 }

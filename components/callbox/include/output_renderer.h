@@ -23,6 +23,7 @@ typedef struct {
     uint32_t cancel_ack_until_ms;
     output_feedback_t feedback;
     uint32_t feedback_generation;
+    bool ota_active;
 } app_output_snapshot_t;
 
 esp_err_t output_renderer_init(void);

@@ -19,6 +19,8 @@ idf_component_register(SRCS "src/protocol_types.c"
                              "src/app_event_queue.c"
                              "src/health_monitor.c"
                              "src/ota_boot_validator.c"
+                             "src/ota_policy.c"
+                             "src/ota_output_adapter.c"
                              "src/status.c"
                              "src/button_gate.c"
                              "src/callbox_config_store.c"
@@ -45,4 +47,4 @@ idf_component_register(SRCS "src/protocol_types.c"
                     REQUIRES freertos platform_nvs bsp esp_timer platform_wifi
                              mqtt mbedtls platform_time esp_http_server
                              esp_netif lwip esp_system esp_common esp_hw_support
-                             bootloader_support boot_validation)
+                             bootloader_support boot_validation ota)
