@@ -12,6 +12,7 @@
 #include "gateway_config.h"
 #include "gateway_mqtt.h"
 #include "gateway_network.h"
+#include "gateway_status.h"
 #include "gateway_topic.h"
 #include "bsp_can.h"
 
@@ -388,6 +389,10 @@ static esp_err_t apply_laser(httpd_req_t *request)
         position.config.position_id);
     if (persist_error != ESP_OK)
         return httpd_resp_send_err(request, 500, esp_err_to_name(persist_error));
+    /* Acknowledge the operator once per explicit Apply request. The Laser
+     * restarts afterwards to request its DLC8 payload, so this is deliberately
+     * tied to accepted CAN commissioning rather than every reply frame. */
+    (void)gateway_diagnostic_report(GATEWAY_DIAG_CONFIG_APPLIED);
     httpd_resp_set_status(request, "202 Accepted");
     return httpd_resp_sendstr(request, "{\"accepted\":true}");
 }

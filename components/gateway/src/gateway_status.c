@@ -14,6 +14,10 @@
 
 static const char *TAG = "GW_STATUS";
 #define LASER_STARTUP_SETTLE_MS 10000LL
+/* A group reload deliberately makes its Lasers restart before they ask for
+ * their DLC8 configuration.  Do not turn that expected commissioning gap
+ * into a red-tower / offline alarm.  CAN and network faults are unaffected. */
+#define LASER_CONFIG_RESTART_GRACE_MS 8000LL
 
 esp_err_t gateway_diagnostic_report(gateway_diagnostic_event_t event)
 {
@@ -39,12 +43,25 @@ static bool laser_config_mismatch_present(void)
     return false;
 }
 
+static bool laser_config_restart_in_progress(void)
+{
+    laser_can_node_status_t node;
+    for (uint8_t id = LASER_ID_MIN; id <= LASER_ID_MAX; ++id) {
+        if (!laser_can_bringup_get_node(id, &node) || !node.config_managed) continue;
+        if (node.config_state == LASER_CONFIG_PENDING ||
+            node.config_state == LASER_CONFIG_SENT) return true;
+    }
+    return false;
+}
+
 static void status_task(void *argument)
 {
     (void)argument;
     bool initialized = false, network = false, mqtt = false, ap = false;
     bool can_ok = true, laser_ok = false, mismatch = false;
     bool laser_monitor_armed = false;
+    bool config_restart_seen = false;
+    int64_t laser_alarm_suppressed_until_ms = 0;
     const int64_t started_ms = esp_timer_get_time() / 1000LL;
     for (;;) {
         bsp_can_status_t can = {0};
@@ -60,9 +77,20 @@ static void status_task(void *argument)
         const bool next_laser = warehouse.configured == 0 ||
                                 warehouse.online == warehouse.configured;
         const bool next_mismatch = laser_config_mismatch_present();
+        const bool config_restart = laser_config_restart_in_progress();
+        const int64_t now_ms = esp_timer_get_time() / 1000LL;
+        if (config_restart && !config_restart_seen) {
+            laser_alarm_suppressed_until_ms = now_ms + LASER_CONFIG_RESTART_GRACE_MS;
+            ESP_LOGI(TAG, "Laser offline alarm muted for %lld ms during configuration reload",
+                     LASER_CONFIG_RESTART_GRACE_MS);
+        }
+        config_restart_seen = config_restart;
+        const bool laser_alarm_suppressed = now_ms < laser_alarm_suppressed_until_ms;
 
         gateway_output_set_health(next_network, next_mqtt, next_ap, next_can,
-                                  next_can_healthy, next_laser, !next_mismatch);
+                                  next_can_healthy,
+                                  next_laser || laser_alarm_suppressed,
+                                  !next_mismatch);
         if (!initialized) {
             network = next_network;
             mqtt = next_mqtt;
@@ -87,6 +115,11 @@ static void status_task(void *argument)
                 if (laser_monitor_armed) {
                     ESP_LOGI(TAG, "Laser alarms armed after startup restore settle time");
                 }
+            } else if (laser_alarm_suppressed) {
+                /* Hold the previous healthy state through the intentional
+                 * Laser reboot.  If it never returns, normal offline alarm
+                 * processing resumes once the grace period expires. */
+                laser_ok = true;
             } else {
                 report_transition(next_laser, &laser_ok,
                                   GATEWAY_DIAG_LASER_RECOVERED,

@@ -56,6 +56,10 @@ static const buzzer_step_t P_LONG_3[] = {
 static const buzzer_step_t P_LONG_4[] = {
     PULSE(400, 150), PULSE(400, 150), PULSE(400, 150), PULSE(400, 500),
 };
+/* Xác nhận áp cấu hình: ngắn - dài, không trùng mã phục hồi/lỗi. */
+static const buzzer_step_t P_CONFIG_APPLIED[] = {
+    PULSE(120, 150), PULSE(400, 500),
+};
 
 #define PATTERN(steps, light) \
     { (steps), (uint8_t)(sizeof(steps) / sizeof((steps)[0])), (light) }
@@ -71,6 +75,7 @@ static const buzzer_pattern_t PATTERNS[GATEWAY_DIAG_EVENT_COUNT] = {
     [GATEWAY_DIAG_LASER_OFFLINE] = PATTERN(P_LONG_4, INDICATOR_RED),
     [GATEWAY_DIAG_LASER_RECOVERED] = PATTERN(P_SHORT_4, INDICATOR_GREEN),
     [GATEWAY_DIAG_CONFIG_MISMATCH] = PATTERN(P_LONG_4, INDICATOR_YELLOW),
+    [GATEWAY_DIAG_CONFIG_APPLIED] = PATTERN(P_CONFIG_APPLIED, INDICATOR_GREEN),
 };
 
 static const char *event_name(gateway_diagnostic_event_t event)
@@ -87,6 +92,7 @@ static const char *event_name(gateway_diagnostic_event_t event)
         [GATEWAY_DIAG_LASER_OFFLINE] = "LASER_OFFLINE RED_LONG_X4",
         [GATEWAY_DIAG_LASER_RECOVERED] = "LASER_RECOVERED GREEN_SHORT_X4",
         [GATEWAY_DIAG_CONFIG_MISMATCH] = "CONFIG_MISMATCH YELLOW_LONG_X4",
+        [GATEWAY_DIAG_CONFIG_APPLIED] = "CONFIG_APPLIED GREEN_SHORT_LONG",
     };
     return event < GATEWAY_DIAG_EVENT_COUNT ? names[event] : "UNKNOWN";
 }
