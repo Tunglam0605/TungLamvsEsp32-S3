@@ -6,7 +6,8 @@ cmake_minimum_required(VERSION 3.22)
 # (tca9554...), components/platform chua cac platform service generic
 # (platform_time...). ESP-IDF chi quet 1 cap cua components/ nen can khai bao them.
 set(EXTRA_COMPONENT_DIRS components/drivers
-                        components/platform)
+                        components/platform
+                        components/services)
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(callbox_sews)
