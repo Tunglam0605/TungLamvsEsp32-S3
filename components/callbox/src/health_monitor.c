@@ -33,6 +33,7 @@ typedef struct {
     TickType_t last_stack_sample;
     UBaseType_t stack_min_free_bytes;
     bool seen;
+    uint32_t check_in_count;
 } health_slot_t;
 
 static health_slot_t s_slots[HEALTH_TASK_COUNT];
@@ -301,9 +302,20 @@ void health_monitor_check_in(health_task_id_t task_id)
     portENTER_CRITICAL(&s_health_lock);
     s_slots[task_id].last_check_in = now;
     s_slots[task_id].seen = true;
+    ++s_slots[task_id].check_in_count;
     if (sample_stack) {
         s_slots[task_id].last_stack_sample = now;
         s_slots[task_id].stack_min_free_bytes = stack_free;
+    }
+    portEXIT_CRITICAL(&s_health_lock);
+}
+
+void health_monitor_get_check_in_counts(uint32_t out_counts[HEALTH_TASK_COUNT])
+{
+    if (out_counts == NULL) return;
+    portENTER_CRITICAL(&s_health_lock);
+    for (int i = 0; i < HEALTH_TASK_COUNT; ++i) {
+        out_counts[i] = s_slots[i].check_in_count;
     }
     portEXIT_CRITICAL(&s_health_lock);
 }

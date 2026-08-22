@@ -23,6 +23,7 @@
 #define CALLBOX_HEALTH_MONITOR_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "esp_err.h"
 
@@ -80,6 +81,10 @@ esp_err_t health_monitor_init(health_monitor_mode_t mode);
  * trước health_monitor_init().
  */
 void health_monitor_check_in(health_task_id_t task_id);
+
+/** Copy monotonically increasing check-in counters without invoking callbacks
+ * or blocking worker tasks. Used by bounded boot qualification only. */
+void health_monitor_get_check_in_counts(uint32_t out_counts[HEALTH_TASK_COUNT]);
 
 /**
  * @brief Phục hồi có kiểm soát khi một worker phụ phát hiện lỗi

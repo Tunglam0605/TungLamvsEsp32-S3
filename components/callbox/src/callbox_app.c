@@ -70,6 +70,8 @@
 #include "health_monitor.h"
 #include "callbox_storage_migration.h"
 #include "time_sync.h"
+#include "boot_validation.h"
+#include "ota_boot_validator.h"
 
 static const char *TAG = "MAIN";
 static volatile esp_err_t s_portal_start_result = ESP_ERR_INVALID_STATE;
@@ -250,6 +252,11 @@ static void boot_fail_restart(const char *stage, esp_err_t error, bool board_rea
 {
     ESP_LOGE(TAG, "Fatal startup failure at %s: %s; restarting",
              stage, esp_err_to_name(error));
+    const esp_err_t rollback_err = ota_boot_validator_handle_local_failure(stage);
+    if (rollback_err != ESP_OK) {
+        ESP_LOGE(TAG, "Pending-image rollback request failed at %s: %s; using controlled restart",
+                 stage, esp_err_to_name(rollback_err));
+    }
     /* Tắt ngay các output nếu BSP đã sẵn sàng. Sau thời gian
      * backoff xả log, tắt lần cuối ngay sát reset để một task đã
      * khởi tạo dở dang không thể để lại DO bật. */
@@ -296,6 +303,8 @@ static void run_recovery_portal(void)
 
     ret = health_monitor_init(HEALTH_MONITOR_MODE_RECOVERY);
     if (ret != ESP_OK) boot_fail_restart("recovery_health_monitor", ret, false);
+    ret = ota_boot_validator_start_recovery();
+    if (ret != ESP_OK) boot_fail_restart("recovery_ota_qualification", ret, false);
 
     ESP_LOGW(TAG, "Recovery AP + WebUI verified ready at http://%s/; STA/SNTP/ETH/MQTT/I/O disabled",
              CALLBOX_AP_IP_ADDR);
@@ -305,6 +314,13 @@ static void run_recovery_portal(void)
 void callbox_app_run(void)
 {
     ESP_LOGI(TAG, "Starting Callbox SEWS Application");
+
+    const esp_err_t boot_validation_err = boot_validation_init();
+    if (boot_validation_err != ESP_OK) {
+        /* Do not pretend a failed state query is valid. A subsequent reset of
+         * a pending image still lets the bootloader select the prior image. */
+        ESP_LOGE(TAG, "Cannot inspect OTA boot state: %s", esp_err_to_name(boot_validation_err));
+    }
 
     health_monitor_boot_begin();
     if (health_monitor_recovery_requested()) run_recovery_portal();
@@ -426,6 +442,8 @@ void callbox_app_run(void)
 
     ret = health_monitor_init(HEALTH_MONITOR_MODE_NORMAL);
     if (ret != ESP_OK) boot_fail_restart("health_monitor", ret, true);
+    ret = ota_boot_validator_start_normal();
+    if (ret != ESP_OK) boot_fail_restart("ota_qualification", ret, true);
 
     ESP_LOGI(TAG, "All tasks created and running");
 

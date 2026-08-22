@@ -1,5 +1,6 @@
 # Production images are deliberately separate from the developer sdkconfig.
 CONFIG_CALLBOX_PRODUCTION_BUILD=y
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 # CONFIG_CALLBOX_ALLOW_ANONYMOUS_MQTT is not set
 
 # HTTP portal, MQTT and dual uplinks share the same lwIP descriptor table.

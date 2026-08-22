@@ -1,4 +1,7 @@
 if(CONFIG_CALLBOX_PRODUCTION_BUILD)
+    if(NOT CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE)
+        message(FATAL_ERROR "Production Callbox build requires bootloader application rollback")
+    endif()
     if(NOT CONFIG_SECURE_BOOT OR NOT CONFIG_SECURE_BOOT_V2_ENABLED)
         message(FATAL_ERROR "Production Callbox build requires Secure Boot V2")
     endif()
@@ -15,6 +18,7 @@ endif()
 idf_component_register(SRCS "src/protocol_types.c"
                              "src/app_event_queue.c"
                              "src/health_monitor.c"
+                             "src/ota_boot_validator.c"
                              "src/status.c"
                              "src/button_gate.c"
                              "src/callbox_config_store.c"
@@ -41,4 +45,4 @@ idf_component_register(SRCS "src/protocol_types.c"
                     REQUIRES freertos platform_nvs bsp esp_timer platform_wifi
                              mqtt mbedtls platform_time esp_http_server
                              esp_netif lwip esp_system esp_common esp_hw_support
-                             bootloader_support)
+                             bootloader_support boot_validation)
