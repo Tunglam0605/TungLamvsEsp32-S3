@@ -75,6 +75,7 @@
 #include "ota_policy.h"
 #include "ota_output_adapter.h"
 #include "ota_service.h"
+#include "ota_https_source.h"
 
 static const char *TAG = "MAIN";
 static volatile esp_err_t s_portal_start_result = ESP_ERR_INVALID_STATE;
@@ -328,6 +329,8 @@ void callbox_app_run(void)
 
     esp_err_t ota_runtime_err = ota_service_init();
     if (ota_runtime_err != ESP_OK) boot_fail_restart("ota_service", ota_runtime_err, false);
+    ota_runtime_err = ota_https_source_init();
+    if (ota_runtime_err != ESP_OK) boot_fail_restart("ota_https_source", ota_runtime_err, false);
     ota_runtime_err = ota_output_adapter_init();
     if (ota_runtime_err != ESP_OK) boot_fail_restart("ota_output_adapter", ota_runtime_err, false);
     ota_policy_set_mode(OTA_POLICY_MODE_NORMAL);

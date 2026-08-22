@@ -1,0 +1,20 @@
+menu "CallBox HTTPS OTA"
+
+config CALLBOX_OTA_HTTPS_ENABLE
+    bool "Enable HTTPS manifest OTA source"
+    default n
+    help
+        Enable the asynchronous CallBox HTTPS OTA source. The source never
+        installs or reboots automatically; a staged image still needs the
+        existing explicit install path.
+
+config CALLBOX_OTA_HTTPS_MANIFEST_URL
+    string "HTTPS OTA manifest URL"
+    depends on CALLBOX_OTA_HTTPS_ENABLE
+    default ""
+    help
+        Compile-time HTTPS URL for the small OTA manifest used by a future
+        internal/server trigger. This is intentionally not stored in Config_t
+        or NVS.
+
+endmenu
