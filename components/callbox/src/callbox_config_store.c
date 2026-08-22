@@ -139,7 +139,8 @@ esp_err_t callbox_config_store_load(Config_t *config)
     if (!config) return ESP_ERR_INVALID_ARG;
 
     platform_nvs_handle_t handle;
-    esp_err_t err = platform_nvs_open(&handle, CALLBOX_STORAGE_NAMESPACE, false);
+    esp_err_t err = platform_nvs_open_partition(&handle, CALLBOX_STORAGE_CFG_PARTITION,
+                                                CALLBOX_STORAGE_NAMESPACE, false);
     if (err == ESP_ERR_NOT_FOUND) {
         /* Namespace chưa từng tạo (boot lần đầu) — dùng toàn bộ default.
          * Mã generic ESP_ERR_NOT_FOUND do platform_nvs map từ NVS_NOT_FOUND. */
@@ -265,7 +266,8 @@ esp_err_t callbox_config_store_save(const Config_t *config)
     if (!config) return ESP_ERR_INVALID_ARG;
 
     platform_nvs_handle_t handle;
-    esp_err_t err = platform_nvs_open(&handle, CALLBOX_STORAGE_NAMESPACE, false);
+    esp_err_t err = platform_nvs_open_partition(&handle, CALLBOX_STORAGE_CFG_PARTITION,
+                                                CALLBOX_STORAGE_NAMESPACE, false);
     if (err != ESP_OK) return err;
 
     /* Mở 1 lần → ghi lần lượt mọi key; nếu 1 key lỗi thì dừng chuỗi ghi

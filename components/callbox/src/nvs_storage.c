@@ -45,8 +45,7 @@ static const char *TAG = "NVS_STORAGE";
 
 esp_err_t nvs_storage_init(void)
 {
-    /* Lifecycle NVS flash do platform_nvs sở hữu (kể cả recovery erase khi
-     * partition bị hỏng — xem platform_nvs.h). */
+    /* Legacy NVS is migration input and is never automatically erased. */
     return platform_nvs_init();
 }
 

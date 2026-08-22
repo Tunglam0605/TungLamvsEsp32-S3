@@ -9,10 +9,8 @@
  *          không cần biết bất kỳ chi tiết ESP-IDF NVS nào.
  *
  *          ═══ VÒNG ĐỜI ═══
- *          - platform_nvs_init(): khởi tạo NVS flash một lần. Nếu partition
- *            bị hỏng (NO_FREE_PAGES / NEW_VERSION_FOUND) thì erase rồi init
- *            lại — recovery như ESP-IDF khuyến nghị. Không bao giờ tự erase
- *            ngoài hai trường hợp đó.
+ *          - platform_nvs_init(): khởi tạo legacy NVS một lần và không bao
+ *            giờ tự erase. Migration owner quyết định xử lý lỗi an toàn.
  *          - platform_nvs_erase_all(): xóa TOÀN BỘ partition NVS.
  *
  *          ═══ TRANSACTION / HANDLE ═══
@@ -78,14 +76,16 @@ typedef struct {
 /**
  * @brief  Khởi tạo NVS flash (gọi một lần khi boot).
  *
- *         Recovery: nếu partition bị hỏng (ESP_ERR_NVS_NO_FREE_PAGES /
- *         ESP_ERR_NVS_NEW_VERSION_FOUND) thì erase toàn bộ partition và
- *         init lại. Mọi lỗi khác được trả nguyên về caller — KHÔNG tự erase.
+ *         This never erases legacy data automatically. All init failures are
+ *         returned so the migration owner can preserve credentials and state.
  *
  * @return ESP_OK                    sẵn sàng
  * @return ESP_ERR_NVS_*             lỗi từ ESP-IDF (không phải lỗi partition)
  */
 esp_err_t platform_nvs_init(void);
+
+/** Initialise a named NVS partition without erasing it. */
+esp_err_t platform_nvs_init_partition(const char *partition_name);
 
 /**
  * @brief  Mở một namespace (1 handle, nhiều thao tác, đóng sau cùng).
@@ -100,6 +100,11 @@ esp_err_t platform_nvs_init(void);
  */
 esp_err_t platform_nvs_open(platform_nvs_handle_t *out_handle,
                             const char *ns_name, bool read_only);
+
+/** Open a namespace in a named NVS partition. */
+esp_err_t platform_nvs_open_partition(platform_nvs_handle_t *out_handle,
+                                      const char *partition_name,
+                                      const char *ns_name, bool read_only);
 
 /**
  * @brief  Đóng session đã mở bằng platform_nvs_open.

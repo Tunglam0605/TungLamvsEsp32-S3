@@ -24,6 +24,9 @@
 /* Namespace duy nhất cho mọi persistence của CallBox. */
 #define CALLBOX_STORAGE_NAMESPACE "callbox"
 
+#define CALLBOX_STORAGE_CFG_PARTITION "nvs_cfg"
+#define CALLBOX_STORAGE_RUNTIME_PARTITION "nvs_runtime"
+
 /* Key sequence (u32) — sequence_store. */
 #define CALLBOX_STORAGE_SEQ_KEY "seq_num"
 

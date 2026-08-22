@@ -68,6 +68,7 @@
 #include "sequence_service.h"
 #include "app_event_queue.h"
 #include "health_monitor.h"
+#include "callbox_storage_migration.h"
 #include "time_sync.h"
 
 static const char *TAG = "MAIN";
@@ -227,6 +228,7 @@ static void start_config_portal_when_ap_is_ready(void)
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Configuration portal start failed: %s", esp_err_to_name(ret));
     }
+
 }
 
 static esp_err_t wait_for_config_portal(uint32_t timeout_ms)
@@ -273,6 +275,8 @@ static void run_recovery_portal(void)
 
     esp_err_t ret = nvs_storage_init();
     if (ret != ESP_OK) boot_fail_restart("recovery_nvs", ret, false);
+    ret = callbox_storage_migrate();
+    if (ret != ESP_OK) boot_fail_restart("recovery_nvs_migration", ret, false);
     if (!load_config_from_nvs()) {
         boot_fail_restart("recovery_config_load", ESP_FAIL, false);
     }
@@ -310,6 +314,11 @@ void callbox_app_run(void)
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize NVS: %s", esp_err_to_name(ret));
         boot_fail_restart("nvs_storage", ret, false);
+    }
+    ret = callbox_storage_migrate();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "NVS migration not verified: %s", esp_err_to_name(ret));
+        boot_fail_restart("nvs_migration", ret, false);
     }
 
     /* Bước 2: nạp cấu hình đã lưu (hoặc factory default) vào g_config */

@@ -60,16 +60,42 @@ static esp_err_t platform_nvs_map_error(esp_err_t err)
 
 esp_err_t platform_nvs_init(void)
 {
-    esp_err_t ret = nvs_flash_init();
-    /* Partition bị hỏng/đầy (mất trang trống hoặc version mới) → xóa sạch
-     * rồi init lại. Đây là recovery duy nhất được phép — mọi lỗi khác trả
-     * nguyên về caller, KHÔNG tự erase dữ liệu người dùng. */
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_LOGW(TAG, "NVS partition was truncated and needs to be erased");
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        ret = nvs_flash_init();
+    /* Legacy NVS is migration input. Never erase it implicitly. */
+    return nvs_flash_init();
+}
+
+esp_err_t platform_nvs_init_partition(const char *partition_name)
+{
+    if (!partition_name) return ESP_ERR_INVALID_ARG;
+
+    esp_err_t err;
+#ifdef CONFIG_NVS_ENCRYPTION
+    /* Custom NVS partitions are not automatically encrypted by
+     * nvs_flash_init_partition(). Reuse the active default security scheme
+     * (HMAC in CallBox production) and the same derived XTS key material. */
+    nvs_sec_scheme_t *scheme = nvs_flash_get_default_security_scheme();
+    if (!scheme) {
+        ESP_LOGE(TAG, "NVS encryption is enabled but no security scheme is active");
+        return ESP_ERR_INVALID_STATE;
     }
-    return ret;
+
+    nvs_sec_cfg_t cfg = {0};
+    err = nvs_flash_read_security_cfg_v2(scheme, &cfg);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "NVS security configuration unavailable: %s",
+                 esp_err_to_name(err));
+        return err;
+    }
+    err = nvs_flash_secure_init_partition(partition_name, &cfg);
+#else
+    err = nvs_flash_init_partition(partition_name);
+#endif
+
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "NVS partition '%s' init failed: %s", partition_name,
+                 esp_err_to_name(err));
+    }
+    return err;
 }
 
 esp_err_t platform_nvs_open(platform_nvs_handle_t *out_handle,
@@ -89,6 +115,19 @@ esp_err_t platform_nvs_open(platform_nvs_handle_t *out_handle,
         }
         return platform_nvs_map_error(err);
     }
+    out_handle->handle = (void *)(uintptr_t)handle;
+    return ESP_OK;
+}
+
+esp_err_t platform_nvs_open_partition(platform_nvs_handle_t *out_handle,
+                                      const char *partition_name,
+                                      const char *ns_name, bool read_only)
+{
+    if (!out_handle || !partition_name || !ns_name) return ESP_ERR_INVALID_ARG;
+    nvs_handle_t handle = 0;
+    const esp_err_t err = nvs_open_from_partition(
+        partition_name, ns_name, read_only ? NVS_READONLY : NVS_READWRITE, &handle);
+    if (err != ESP_OK) return platform_nvs_map_error(err);
     out_handle->handle = (void *)(uintptr_t)handle;
     return ESP_OK;
 }

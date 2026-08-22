@@ -1,5 +1,13 @@
-# Name,   Type, SubType, Offset,   Size,   Flags
-# Keep NVS and PHY at the standard offsets; expand the factory app to 2 MB.
-nvs,      data, nvs,     0x9000,   0x6000,
-phy_init, data, phy,     0xf000,   0x1000,
-factory,  app,  factory, 0x10000,  2M,
+# CallBox 16 MiB Phase 0 flash map. Do not deploy this table through OTA.
+# Name,       Type, SubType,   Offset,   Size,     Flags
+nvs,          data, nvs,       0x9000,   0x6000,
+phy_init,     data, phy,       0xf000,   0x1000,
+factory,      app,  factory,   0x10000,  2M,
+otadata,      data, ota,       0x210000, 0x2000,
+nvs_cfg,      data, nvs,       0x214000, 0x20000,
+nvs_runtime,  data, nvs,       0x234000, 0x20000,
+coredump,     data, coredump,  0x254000, 0x40000,
+ota_0,        app,  ota_0,     0x2a0000, 4M,
+ota_1,        app,  ota_1,     0x6a0000, 4M,
+storage,      data, spiffs,    0xaa0000, 2M,
+reserve,      data, 0x40,      0xca0000, 0x360000,
